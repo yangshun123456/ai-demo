@@ -75,11 +75,12 @@
             <span>视频网页链接</span>
             <input name="url" type="url" placeholder="https://example.com/video-page" required />
           </label>
-          <label class="field">
-            <span>资源序号</span>
-            <input name="videoIndex" type="number" min="0" value="0" />
-          </label>
-          <button class="primary" type="submit">开始爬取视频</button>
+          <button class="primary" type="submit">识别视频资源</button>
+          <div class="resource-box" id="videoResources" hidden>
+            <div class="resource-title">选择要下载的视频资源</div>
+            <div class="resource-list" id="videoResourceList"></div>
+            <button class="primary" id="downloadVideo" type="button">下载选中视频</button>
+          </div>
         </form>
       </section>
 

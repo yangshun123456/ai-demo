@@ -376,28 +376,31 @@ async function downloadBilibiliProgressive(video, outputDir, index, referer, onP
   return outputPath;
 }
 
-async function crawlVideo(userOptions) {
-  const options = {
-    url: '',
-    outputDir: path.resolve(process.cwd(), 'downloads/videos'),
-    videoIndex: 0,
-    onProgress: () => {},
-    ...userOptions,
-  };
+async function getVideoResources(url, onProgress = () => {}) {
+  if (!url) throw new Error('请填写视频网页链接。');
 
-  if (!options.url) throw new Error('请填写视频网页链接。');
-
-  options.onProgress('正在打开网页并识别视频资源。');
-  const videos = uniqueVideos(await collectVideos(options.url));
+  onProgress('正在打开网页并识别视频资源。');
+  const videos = uniqueVideos(await collectVideos(url));
   if (videos.length === 0) {
     throw new Error('当前网页没有识别到 video 标签或 source 视频地址。');
   }
 
-  options.onProgress('识别到的视频资源:');
+  onProgress('识别到的视频资源:');
   videos.forEach((video, resourceIndex) => {
-    options.onProgress(`${resourceIndex}. ${describeVideo(video)}`);
+    onProgress(`${resourceIndex}. ${describeVideo(video)}`);
   });
 
+  return {
+    videos,
+    resources: videos.map((video, index) => ({
+      index,
+      label: describeVideo(video),
+      kind: video.kind,
+    })),
+  };
+}
+
+async function downloadSelectedVideo(options, videos) {
   const index = Math.min(Math.max(Number(options.videoIndex) || 0, 0), videos.length - 1);
   const selectedVideo = videos[index];
   const resolvedVideoUrl = resolveUrl(selectedVideo.src, options.url);
@@ -445,8 +448,24 @@ async function crawlVideo(userOptions) {
   return { outputPath, videos: videos.map(describeVideo) };
 }
 
+async function crawlVideo(userOptions) {
+  const options = {
+    url: '',
+    outputDir: path.resolve(process.cwd(), 'downloads/videos'),
+    videoIndex: 0,
+    onProgress: () => {},
+    ...userOptions,
+  };
+
+  if (!options.url) throw new Error('请填写视频网页链接。');
+
+  const videos = options.videos || (await getVideoResources(options.url, options.onProgress)).videos;
+  return downloadSelectedVideo(options, videos);
+}
+
 module.exports = {
   collectVideos,
   crawlVideo,
   downloadVideo,
+  getVideoResources,
 };

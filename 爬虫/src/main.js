@@ -5,7 +5,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const { URL } = require('url');
 const { crawlNovel } = require('./crawlers/novel');
-const { crawlVideo } = require('./crawlers/video');
+const { crawlVideo, getVideoResources } = require('./crawlers/video');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -24,6 +24,7 @@ const MIME_TYPES = {
 };
 
 const jobs = new Map();
+const videoResourceCache = new Map();
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.json'] });
@@ -201,8 +202,14 @@ async function handleNovel(req, res) {
 async function handleVideo(req, res) {
   const body = await readJsonBody(req);
   const job = createJob('video', async (addLog) => {
+    const cached = body.resourceId ? videoResourceCache.get(body.resourceId) : null;
+    if (body.resourceId && !cached) {
+      throw new Error('视频资源已过期，请重新识别。');
+    }
+
     const result = await crawlVideo({
-      url: body.url,
+      url: cached?.url || body.url,
+      videos: cached?.videos,
       videoIndex: Math.max(0, Math.trunc(toNumber(body.videoIndex, 0))),
       outputDir: path.join(DOWNLOAD_DIR, 'videos'),
       onProgress: addLog,
@@ -224,6 +231,31 @@ async function handleVideo(req, res) {
   });
 }
 
+async function handleVideoResources(req, res) {
+  const body = await readJsonBody(req);
+  const job = createJob('video-resources', async (addLog) => {
+    const result = await getVideoResources(body.url, addLog);
+    const resourceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    videoResourceCache.set(resourceId, {
+      url: body.url,
+      videos: result.videos,
+      createdAt: Date.now(),
+    });
+
+    return {
+      type: 'video-resources',
+      resourceId,
+      resources: result.resources,
+    };
+  });
+
+  sendJson(res, 202, {
+    ok: true,
+    jobId: job.id,
+  });
+}
+
 async function route(req, res) {
   const { pathname } = new URL(req.url, `http://${req.headers.host}`);
 
@@ -235,6 +267,11 @@ async function route(req, res) {
 
     if (req.method === 'POST' && pathname === '/api/video') {
       await handleVideo(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/video/resources') {
+      await handleVideoResources(req, res);
       return;
     }
 

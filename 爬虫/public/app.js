@@ -3,7 +3,12 @@ const panels = document.querySelectorAll('.panel');
 const message = document.querySelector('#message');
 const log = document.querySelector('#log');
 const clearLog = document.querySelector('#clearLog');
+const videoForm = document.querySelector('#videoForm');
+const videoResources = document.querySelector('#videoResources');
+const videoResourceList = document.querySelector('#videoResourceList');
+const downloadVideo = document.querySelector('#downloadVideo');
 let currentEvents = null;
+let currentVideoResourceId = '';
 
 function setActiveTab(name) {
   tabs.forEach((tab) => tab.classList.toggle('is-active', tab.dataset.tab === name));
@@ -34,8 +39,17 @@ function formToJson(form) {
   return data;
 }
 
-async function submitTask(form, endpoint, pendingText) {
-  const button = form.querySelector('button[type="submit"]');
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+async function submitTask(form, endpoint, pendingText, options = {}) {
+  const button = options.button || form.querySelector('button[type="submit"]');
   if (currentEvents) {
     currentEvents.close();
     currentEvents = null;
@@ -49,7 +63,7 @@ async function submitTask(form, endpoint, pendingText) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formToJson(form)),
+      body: JSON.stringify(options.body || formToJson(form)),
     });
     const result = await response.json();
 
@@ -61,7 +75,7 @@ async function submitTask(form, endpoint, pendingText) {
       throw new Error('服务没有返回任务 ID');
     }
 
-    watchTask(result.jobId, button);
+    watchTask(result.jobId, button, options.onDone);
   } catch (error) {
     setMessage(`失败：${error.message}`);
     appendLog(error.stack || error.message);
@@ -69,13 +83,13 @@ async function submitTask(form, endpoint, pendingText) {
   }
 }
 
-function watchTask(jobId, button) {
+function watchTask(jobId, button, onDone) {
   currentEvents = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}`);
 
   currentEvents.addEventListener('snapshot', (event) => {
     const data = JSON.parse(event.data);
     appendLog(data.logs || []);
-    if (data.status === 'done') finishTask(data.result, button);
+    if (data.status === 'done') finishTask(data.result, button, onDone);
     if (data.status === 'error') failTask(data.error, data.logs, button);
   });
 
@@ -87,7 +101,7 @@ function watchTask(jobId, button) {
 
   currentEvents.addEventListener('done', (event) => {
     const data = JSON.parse(event.data);
-    finishTask(data.result, button);
+    finishTask(data.result, button, onDone);
   });
 
   currentEvents.addEventListener('error', (event) => {
@@ -103,13 +117,44 @@ function watchTask(jobId, button) {
   });
 }
 
-function finishTask(result, button) {
-  setMessage(`完成，文件已保存到 ${result?.outputPath || 'downloads 目录'}。`, result?.downloadUrl);
+function finishTask(result, button, onDone) {
+  if (onDone) {
+    onDone(result);
+  } else {
+    setMessage(`完成，文件已保存到 ${result?.outputPath || 'downloads 目录'}。`, result?.downloadUrl);
+  }
   button.disabled = false;
   if (currentEvents) {
     currentEvents.close();
     currentEvents = null;
   }
+}
+
+function renderVideoResources(result) {
+  currentVideoResourceId = result?.resourceId || '';
+  const resources = result?.resources || [];
+
+  if (!currentVideoResourceId || resources.length === 0) {
+    videoResources.hidden = true;
+    setMessage('没有可选择的视频资源。');
+    return;
+  }
+
+  videoResourceList.innerHTML = resources
+    .map(
+      (resource, index) => `
+        <label class="resource-option">
+          <input type="radio" name="videoResource" value="${resource.index}" ${index === 0 ? 'checked' : ''} />
+          <span>
+            <strong>${resource.index}. ${escapeHtml(resource.kind || 'video')}</strong>
+            <span>${escapeHtml(resource.label)}</span>
+          </span>
+        </label>
+      `,
+    )
+    .join('');
+  videoResources.hidden = false;
+  setMessage('请选择要下载的视频资源。');
 }
 
 function failTask(error, logs, button) {
@@ -131,12 +176,40 @@ document.querySelector('#novelForm').addEventListener('submit', (event) => {
   submitTask(event.currentTarget, '/api/novel', '小说爬取中，章节较多时会需要一些时间。');
 });
 
-document.querySelector('#videoForm').addEventListener('submit', (event) => {
+videoForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  submitTask(event.currentTarget, '/api/video', '视频识别和下载中，请保持页面打开。');
+  videoResources.hidden = true;
+  currentVideoResourceId = '';
+  submitTask(event.currentTarget, '/api/video/resources', '正在识别视频资源，请稍等。', {
+    onDone: renderVideoResources,
+  });
+});
+
+downloadVideo.addEventListener('click', () => {
+  const selected = videoResourceList.querySelector('input[name="videoResource"]:checked');
+  if (!currentVideoResourceId || !selected) {
+    setMessage('请先识别并选择一个视频资源。');
+    return;
+  }
+
+  const data = formToJson(videoForm);
+  data.resourceId = currentVideoResourceId;
+  data.videoIndex = selected.value;
+
+  submitTask(
+    videoForm,
+    '/api/video',
+    '开始下载选中的视频资源。',
+    {
+      button: downloadVideo,
+      body: data,
+    },
+  );
 });
 
 clearLog.addEventListener('click', () => {
   setMessage('等待任务提交。');
   appendLog('');
+  videoResources.hidden = true;
+  currentVideoResourceId = '';
 });

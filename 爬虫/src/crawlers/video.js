@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
 const axios = require('axios');
 const { chromium } = require('playwright');
@@ -100,6 +99,26 @@ function getBilibiliPlayInfoVideos(playInfo) {
     .filter((video) => video.src);
 }
 
+function getBilibiliProgressiveVideos(playInfo) {
+  const data = playInfo?.data || playInfo?.result || {};
+  const durl = Array.isArray(data.durl) ? data.durl : [];
+  const segments = durl.map((segment) => segment.url).filter(Boolean);
+
+  if (!segments.length) return [];
+
+  return [
+    {
+      kind: 'bilibili-progressive',
+      videoIndex: 0,
+      src: segments[0],
+      backupUrls: durl[0].backup_url || durl[0].backupUrl || [],
+      segments: durl.map((segment) => segment.url).filter(Boolean),
+      size: durl.reduce((total, item) => total + Number(item.size || 0), 0),
+      quality: getBilibiliQualityName(playInfo, data.quality),
+    },
+  ];
+}
+
 async function collectVideos(pageUrl) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -155,20 +174,33 @@ async function collectVideos(pageUrl) {
 
       const initialState = window.__INITIAL_STATE__ || null;
       let playInfo = window.__playinfo__ || null;
+      let progressivePlayInfo = null;
 
       if (!playInfo && initialState?.videoData?.bvid) {
         const videoData = initialState.videoData;
         const cid = videoData.cid || videoData.pages?.[0]?.cid;
 
         if (cid) {
-          const apiUrl =
-            'https://api.bilibili.com/x/player/wbi/playurl' +
-            `?bvid=${encodeURIComponent(videoData.bvid)}` +
-            `&cid=${encodeURIComponent(cid)}` +
-            '&qn=127&fnval=4048&fourk=1';
+          try {
+            const progressiveUrl =
+              'https://api.bilibili.com/x/player/wbi/playurl' +
+              `?bvid=${encodeURIComponent(videoData.bvid)}` +
+              `&cid=${encodeURIComponent(cid)}` +
+              '&qn=80&fnval=0&fourk=1';
+            const response = await fetch(progressiveUrl, { credentials: 'include' });
+            const result = await response.json();
+            if (result.code === 0 && result.data) progressivePlayInfo = result;
+          } catch {
+            progressivePlayInfo = null;
+          }
 
           try {
-            const response = await fetch(apiUrl, { credentials: 'include' });
+            const dashUrl =
+              'https://api.bilibili.com/x/player/wbi/playurl' +
+              `?bvid=${encodeURIComponent(videoData.bvid)}` +
+              `&cid=${encodeURIComponent(cid)}` +
+              '&qn=127&fnval=4048&fourk=1';
+            const response = await fetch(dashUrl, { credentials: 'include' });
             const result = await response.json();
             if (result.code === 0 && result.data) playInfo = result;
           } catch {
@@ -177,15 +209,16 @@ async function collectVideos(pageUrl) {
         }
       }
 
-      return { playInfo, tagVideos };
+      return { playInfo, progressivePlayInfo, tagVideos };
     }, pageUrl);
 
     const cookieHeader = (await page.context().cookies())
       .map((cookie) => `${cookie.name}=${cookie.value}`)
       .join('; ');
+    const progressiveVideos = getBilibiliProgressiveVideos(videos.progressivePlayInfo);
     const bilibiliVideos = getBilibiliPlayInfoVideos(videos.playInfo);
 
-    return [...videos.tagVideos, ...bilibiliVideos].map((video) => ({
+    return [...videos.tagVideos, ...progressiveVideos, ...bilibiliVideos].map((video) => ({
       ...video,
       pageUrl,
       cookieHeader,
@@ -210,6 +243,13 @@ function uniqueVideos(videos) {
 }
 
 function describeVideo(video) {
+  if (video.kind === 'bilibili-progressive') {
+    const segmentText = video.segments?.length > 1 ? `, ${video.segments.length} 段` : '';
+    return `Bilibili 完整视频 ${video.quality || ''}${segmentText}${
+      video.size ? `, ${formatBytes(video.size)}` : ''
+    }`;
+  }
+
   if (video.kind === 'bilibili-dash') {
     const size = video.width && video.height ? `${video.width}x${video.height}` : '未知尺寸';
     const bandwidth = video.bandwidth ? `, ${formatBytes(video.bandwidth)}/s` : '';
@@ -233,7 +273,14 @@ function getRequestHeaders(referer, cookieHeader = '') {
   };
 }
 
-async function downloadToFile(videoUrl, outputPath, referer = videoUrl, cookieHeader = '', onProgress) {
+async function downloadToFile(
+  videoUrl,
+  outputPath,
+  referer = videoUrl,
+  cookieHeader = '',
+  onProgress,
+  append = false,
+) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const response = await axios({
@@ -261,7 +308,7 @@ async function downloadToFile(videoUrl, outputPath, referer = videoUrl, cookieHe
   });
 
   await new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(outputPath);
+    const writer = fs.createWriteStream(outputPath, append ? { flags: 'a' } : undefined);
     response.data.pipe(writer);
     writer.on('finish', resolve);
     writer.on('error', reject);
@@ -283,53 +330,50 @@ async function downloadVideo(videoUrl, outputDir, index = 0, referer = videoUrl,
   );
 }
 
-function hasFfmpeg() {
-  const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
-  return result.status === 0;
-}
-
-async function mergeWithFfmpeg(videoPath, audioPath, outputPath) {
-  await new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-i', audioPath, '-c', 'copy', outputPath], {
-      stdio: 'ignore',
-    });
-
-    ffmpeg.on('error', reject);
-    ffmpeg.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg 合并失败，退出码: ${code}`));
-    });
-  });
-
-  return outputPath;
-}
-
 async function downloadBilibiliDash(video, outputDir, index, referer, onProgress) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const baseName = getSafeFileName(`bilibili-${video.quality || index + 1}`, `bilibili-${index + 1}`);
   const videoPath = path.join(outputDir, `${baseName}.video.m4s`);
   const audioPath = path.join(outputDir, `${baseName}.audio.m4s`);
-  const mergedPath = path.join(outputDir, `${baseName}.mp4`);
 
   onProgress(`开始下载视频流: ${video.quality || index + 1}`);
   await downloadToFile(video.src, videoPath, referer, video.cookieHeader, onProgress);
 
-  if (!video.audioSrc) return videoPath;
-
-  onProgress('开始下载音频流');
-  await downloadToFile(video.audioSrc, audioPath, referer, video.cookieHeader, onProgress);
-
-  if (!hasFfmpeg()) {
-    return {
-      videoPath,
-      audioPath,
-      message: '未检测到 ffmpeg，已分别保存视频流和音频流。',
-    };
+  if (video.audioSrc) {
+    onProgress('开始下载音频流');
+    await downloadToFile(video.audioSrc, audioPath, referer, video.cookieHeader, onProgress);
   }
 
-  onProgress('开始合并音视频');
-  return mergeWithFfmpeg(videoPath, audioPath, mergedPath);
+  throw new Error(
+    `当前只识别到 DASH 分离流，已保存 m4s 到 ${outputDir}。不使用 ffmpeg 时无法把独立音频轨和视频轨封装成一个 mp4，请选择“Bilibili 完整视频”资源序号重试。`,
+  );
+}
+
+async function downloadBilibiliProgressive(video, outputDir, index, referer, onProgress) {
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const baseName = getSafeFileName(`bilibili-${video.quality || index + 1}`, `bilibili-${index + 1}`);
+  const outputPath = path.join(outputDir, `${baseName}.mp4`);
+  const segments = video.segments?.length ? video.segments : [video.src];
+
+  for (let i = 0; i < segments.length; i += 1) {
+    onProgress(
+      segments.length > 1
+        ? `开始下载完整视频分段 ${i + 1}/${segments.length}`
+        : '开始下载完整视频',
+    );
+    await downloadToFile(
+      resolveUrl(segments[i], referer),
+      outputPath,
+      referer,
+      video.cookieHeader,
+      onProgress,
+      i > 0,
+    );
+  }
+
+  return outputPath;
 }
 
 async function crawlVideo(userOptions) {
@@ -349,12 +393,31 @@ async function crawlVideo(userOptions) {
     throw new Error('当前网页没有识别到 video 标签或 source 视频地址。');
   }
 
+  options.onProgress('识别到的视频资源:');
+  videos.forEach((video, resourceIndex) => {
+    options.onProgress(`${resourceIndex}. ${describeVideo(video)}`);
+  });
+
   const index = Math.min(Math.max(Number(options.videoIndex) || 0, 0), videos.length - 1);
   const selectedVideo = videos[index];
   const resolvedVideoUrl = resolveUrl(selectedVideo.src, options.url);
   const resolvedOutputDir = path.resolve(options.outputDir);
 
   options.onProgress(`已选择资源: ${describeVideo(selectedVideo)}`);
+
+  if (selectedVideo.kind === 'bilibili-progressive') {
+    const outputPath = await downloadBilibiliProgressive(
+      {
+        ...selectedVideo,
+        src: resolvedVideoUrl,
+      },
+      resolvedOutputDir,
+      index,
+      options.url,
+      options.onProgress,
+    );
+    return { outputPath, videos: videos.map(describeVideo) };
+  }
 
   if (selectedVideo.kind === 'bilibili-dash') {
     const result = await downloadBilibiliDash(

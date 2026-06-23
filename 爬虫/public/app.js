@@ -3,6 +3,7 @@ const panels = document.querySelectorAll('.panel');
 const message = document.querySelector('#message');
 const log = document.querySelector('#log');
 const clearLog = document.querySelector('#clearLog');
+let currentEvents = null;
 
 function setActiveTab(name) {
   tabs.forEach((tab) => tab.classList.toggle('is-active', tab.dataset.tab === name));
@@ -35,6 +36,11 @@ function formToJson(form) {
 
 async function submitTask(form, endpoint, pendingText) {
   const button = form.querySelector('button[type="submit"]');
+  if (currentEvents) {
+    currentEvents.close();
+    currentEvents = null;
+  }
+
   button.disabled = true;
   setMessage(pendingText);
   appendLog('任务提交中，请等待。');
@@ -51,13 +57,68 @@ async function submitTask(form, endpoint, pendingText) {
       throw new Error(result.error || '任务失败');
     }
 
-    setMessage(`完成，文件已保存到 ${result.outputPath || 'downloads 目录'}。`, result.downloadUrl);
-    appendLog(result.logs || []);
+    if (!result.jobId) {
+      throw new Error('服务没有返回任务 ID');
+    }
+
+    watchTask(result.jobId, button);
   } catch (error) {
     setMessage(`失败：${error.message}`);
     appendLog(error.stack || error.message);
-  } finally {
     button.disabled = false;
+  }
+}
+
+function watchTask(jobId, button) {
+  currentEvents = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}`);
+
+  currentEvents.addEventListener('snapshot', (event) => {
+    const data = JSON.parse(event.data);
+    appendLog(data.logs || []);
+    if (data.status === 'done') finishTask(data.result, button);
+    if (data.status === 'error') failTask(data.error, data.logs, button);
+  });
+
+  currentEvents.addEventListener('progress', (event) => {
+    const data = JSON.parse(event.data);
+    appendLog(data.logs || [data.message]);
+    log.scrollTop = log.scrollHeight;
+  });
+
+  currentEvents.addEventListener('done', (event) => {
+    const data = JSON.parse(event.data);
+    finishTask(data.result, button);
+  });
+
+  currentEvents.addEventListener('error', (event) => {
+    if (event.data) {
+      const data = JSON.parse(event.data);
+      failTask(data.error, data.logs, button);
+      return;
+    }
+
+    if (button.disabled) {
+      failTask('实时连接已断开，请查看服务是否仍在运行。', null, button);
+    }
+  });
+}
+
+function finishTask(result, button) {
+  setMessage(`完成，文件已保存到 ${result?.outputPath || 'downloads 目录'}。`, result?.downloadUrl);
+  button.disabled = false;
+  if (currentEvents) {
+    currentEvents.close();
+    currentEvents = null;
+  }
+}
+
+function failTask(error, logs, button) {
+  setMessage(`失败：${error || '任务失败'}`);
+  if (logs) appendLog(logs);
+  button.disabled = false;
+  if (currentEvents) {
+    currentEvents.close();
+    currentEvents = null;
   }
 }
 

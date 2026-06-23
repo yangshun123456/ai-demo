@@ -23,6 +23,8 @@ const MIME_TYPES = {
   '.m4s': 'video/iso.segment',
 };
 
+const jobs = new Map();
+
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.json'] });
   res.end(JSON.stringify(data));
@@ -48,6 +50,95 @@ function getDownloadUrl(filePath) {
   const relative = path.relative(DOWNLOAD_DIR, filePath);
   if (relative.startsWith('..')) return '';
   return `/downloads/${relative.split(path.sep).map(encodeURIComponent).join('/')}`;
+}
+
+function createJob(type, runner) {
+  const job = {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    status: 'running',
+    logs: [],
+    result: null,
+    error: '',
+    clients: new Set(),
+    createdAt: Date.now(),
+  };
+
+  jobs.set(job.id, job);
+
+  const push = (event, data) => {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of job.clients) {
+      client.write(payload);
+    }
+  };
+
+  const addLog = (message) => {
+    const text = String(message);
+    const last = job.logs[job.logs.length - 1];
+    if (text.startsWith('下载中:') && String(last || '').startsWith('下载中:')) {
+      job.logs[job.logs.length - 1] = text;
+    } else if (last !== text) {
+      job.logs.push(text);
+    }
+    if (job.logs.length > 300) job.logs.splice(0, job.logs.length - 300);
+    push('progress', { message: text, logs: job.logs, status: job.status });
+  };
+
+  runner(addLog)
+    .then((result) => {
+      job.status = 'done';
+      job.result = result;
+      push('done', { status: job.status, result, logs: job.logs });
+      closeJobClients(job);
+    })
+    .catch((error) => {
+      job.status = 'error';
+      job.error = error.message || '任务失败';
+      push('error', { status: job.status, error: job.error, logs: job.logs });
+      closeJobClients(job);
+    });
+
+  return job;
+}
+
+function closeJobClients(job) {
+  setTimeout(() => {
+    for (const client of job.clients) {
+      client.end();
+    }
+    job.clients.clear();
+  }, 300);
+}
+
+function streamJob(req, res, jobId) {
+  const job = jobs.get(jobId);
+  if (!job) {
+    sendError(res, 404, '任务不存在。');
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  });
+  res.write(`event: snapshot\ndata: ${JSON.stringify({
+    status: job.status,
+    logs: job.logs,
+    result: job.result,
+    error: job.error,
+  })}\n\n`);
+
+  if (job.status !== 'running') {
+    res.end();
+    return;
+  }
+
+  job.clients.add(res);
+  req.on('close', () => {
+    job.clients.delete(res);
+  });
 }
 
 async function serveFile(res, filePath) {
@@ -78,59 +169,58 @@ async function serveStatic(req, res, pathname) {
 
 async function handleNovel(req, res) {
   const body = await readJsonBody(req);
-  const logs = [];
-  const result = await crawlNovel({
-    url: body.url,
-    out: body.out,
-    chapterLinkSelector: body.chapterLinkSelector,
-    contentSelector: body.contentSelector,
-    titleSelector: body.titleSelector,
-    start: Math.max(1, Math.trunc(toNumber(body.start, 1))),
-    limit: Math.max(0, Math.trunc(toNumber(body.limit, 0))),
-    delay: Math.max(0, Math.trunc(toNumber(body.delay, 600))),
-    single: Boolean(body.single),
-    outputDir: path.join(DOWNLOAD_DIR, 'novels'),
-    onProgress(message) {
-      logs.push(message);
-    },
+  const job = createJob('novel', async (addLog) => {
+    const result = await crawlNovel({
+      url: body.url,
+      out: body.out,
+      chapterLinkSelector: body.chapterLinkSelector,
+      contentSelector: body.contentSelector,
+      titleSelector: body.titleSelector,
+      start: Math.max(1, Math.trunc(toNumber(body.start, 1))),
+      limit: Math.max(0, Math.trunc(toNumber(body.limit, 0))),
+      delay: Math.max(0, Math.trunc(toNumber(body.delay, 600))),
+      single: Boolean(body.single),
+      outputDir: path.join(DOWNLOAD_DIR, 'novels'),
+      onProgress: addLog,
+    });
+
+    return {
+      type: 'novel',
+      outputPath: result.outputPath,
+      downloadUrl: getDownloadUrl(result.outputPath),
+      chapters: result.chapters,
+    };
   });
 
-  sendJson(res, 200, {
+  sendJson(res, 202, {
     ok: true,
-    type: 'novel',
-    outputPath: result.outputPath,
-    downloadUrl: getDownloadUrl(result.outputPath),
-    logs,
+    jobId: job.id,
   });
 }
 
 async function handleVideo(req, res) {
   const body = await readJsonBody(req);
-  const logs = [];
-  const result = await crawlVideo({
-    url: body.url,
-    videoIndex: Math.max(0, Math.trunc(toNumber(body.videoIndex, 0))),
-    outputDir: path.join(DOWNLOAD_DIR, 'videos'),
-    onProgress(message) {
-      const last = logs[logs.length - 1];
-      if (String(message).startsWith('下载中:') && String(last || '').startsWith('下载中:')) {
-        logs[logs.length - 1] = message;
-        return;
-      }
-      if (last !== message) logs.push(message);
-      if (logs.length > 300) logs.splice(0, logs.length - 300);
-    },
+  const job = createJob('video', async (addLog) => {
+    const result = await crawlVideo({
+      url: body.url,
+      videoIndex: Math.max(0, Math.trunc(toNumber(body.videoIndex, 0))),
+      outputDir: path.join(DOWNLOAD_DIR, 'videos'),
+      onProgress: addLog,
+    });
+    const outputPath = typeof result.outputPath === 'string' ? result.outputPath : '';
+
+    return {
+      type: 'video',
+      outputPath,
+      downloadUrl: outputPath ? getDownloadUrl(outputPath) : '',
+      result: result.outputPath,
+      videos: result.videos,
+    };
   });
 
-  const outputPath = typeof result.outputPath === 'string' ? result.outputPath : '';
-  sendJson(res, 200, {
+  sendJson(res, 202, {
     ok: true,
-    type: 'video',
-    outputPath,
-    downloadUrl: outputPath ? getDownloadUrl(outputPath) : '',
-    result: result.outputPath,
-    videos: result.videos,
-    logs,
+    jobId: job.id,
   });
 }
 
@@ -145,6 +235,11 @@ async function route(req, res) {
 
     if (req.method === 'POST' && pathname === '/api/video') {
       await handleVideo(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname.startsWith('/api/jobs/')) {
+      streamJob(req, res, pathname.replace('/api/jobs/', ''));
       return;
     }
 

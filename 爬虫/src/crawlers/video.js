@@ -1,39 +1,9 @@
-#!/usr/bin/env node
-
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
 const axios = require('axios');
 const { chromium } = require('playwright');
-
-const DEFAULT_OUTPUT_DIR = path.resolve(process.cwd(), 'downloads');
-
-function printUsage() {
-  console.log(`
-用法:
-  node index.js <网页URL> [输出目录]
-
-示例:
-  node index.js https://example.com/video-page
-  node index.js https://example.com/video-page ./videos
-`);
-}
-
-function askQuestion(question) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
 
 function resolveUrl(src, pageUrl) {
   if (!src) return '';
@@ -97,40 +67,37 @@ function getBilibiliPlayInfoVideos(playInfo) {
   const data = playInfo?.data || playInfo?.result || {};
   const dash = data.dash;
 
-  if (!dash?.video?.length) {
-    return [];
-  }
+  if (!dash?.video?.length) return [];
 
   const bestAudio = [...(dash.audio || [])].sort(
     (a, b) => (b.bandwidth || 0) - (a.bandwidth || 0),
   )[0];
 
-  return dash.video.map((video, index) => {
-    const videoUrl =
-      video.baseUrl ||
-      video.base_url ||
-      video.backupUrl?.[0] ||
-      video.backup_url?.[0];
-    const audioUrl = bestAudio
-      ? bestAudio.baseUrl ||
-        bestAudio.base_url ||
-        bestAudio.backupUrl?.[0] ||
-        bestAudio.backup_url?.[0]
-      : '';
+  return dash.video
+    .map((video, index) => {
+      const videoUrl =
+        video.baseUrl || video.base_url || video.backupUrl?.[0] || video.backup_url?.[0];
+      const audioUrl = bestAudio
+        ? bestAudio.baseUrl ||
+          bestAudio.base_url ||
+          bestAudio.backupUrl?.[0] ||
+          bestAudio.backup_url?.[0]
+        : '';
 
-    return {
-      kind: 'bilibili-dash',
-      videoIndex: index,
-      src: videoUrl,
-      audioSrc: audioUrl,
-      type: video.mimeType || video.mime_type || 'video/mp4',
-      codec: video.codecs || '',
-      bandwidth: video.bandwidth || 0,
-      width: video.width || 0,
-      height: video.height || 0,
-      quality: getBilibiliQualityName(playInfo, video.id),
-    };
-  }).filter((video) => video.src);
+      return {
+        kind: 'bilibili-dash',
+        videoIndex: index,
+        src: videoUrl,
+        audioSrc: audioUrl,
+        type: video.mimeType || video.mime_type || 'video/mp4',
+        codec: video.codecs || '',
+        bandwidth: video.bandwidth || 0,
+        width: video.width || 0,
+        height: video.height || 0,
+        quality: getBilibiliQualityName(playInfo, video.id),
+      };
+    })
+    .filter((video) => video.src);
 }
 
 async function collectVideos(pageUrl) {
@@ -203,20 +170,14 @@ async function collectVideos(pageUrl) {
           try {
             const response = await fetch(apiUrl, { credentials: 'include' });
             const result = await response.json();
-
-            if (result.code === 0 && result.data) {
-              playInfo = result;
-            }
+            if (result.code === 0 && result.data) playInfo = result;
           } catch {
             playInfo = null;
           }
         }
       }
 
-      return {
-        playInfo,
-        tagVideos,
-      };
+      return { playInfo, tagVideos };
     }, pageUrl);
 
     const cookieHeader = (await page.context().cookies())
@@ -239,11 +200,9 @@ function uniqueVideos(videos) {
 
   return videos.filter((video) => {
     const key = `${video.kind}:${video.src}:${video.audioSrc || ''}`;
-
     if (!video.src || (video.kind === 'direct' && video.src.startsWith('blob:'))) {
       return false;
     }
-
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -252,36 +211,14 @@ function uniqueVideos(videos) {
 
 function describeVideo(video) {
   if (video.kind === 'bilibili-dash') {
-    const size =
-      video.width && video.height ? `${video.width}x${video.height}` : '未知尺寸';
+    const size = video.width && video.height ? `${video.width}x${video.height}` : '未知尺寸';
     const bandwidth = video.bandwidth ? `, ${formatBytes(video.bandwidth)}/s` : '';
-
-    return `Bilibili DASH ${video.quality || ''} ${size}${bandwidth}${video.codec ? `, ${video.codec}` : ''}`;
+    return `Bilibili DASH ${video.quality || ''} ${size}${bandwidth}${
+      video.codec ? `, ${video.codec}` : ''
+    }`;
   }
 
   return `${video.src}${video.type ? ` (${video.type})` : ''}`;
-}
-
-async function selectVideo(videos) {
-  if (videos.length === 1) {
-    return videos[0];
-  }
-
-  console.log('检测到多个视频资源:');
-  videos.forEach((video, index) => {
-    console.log(`${index + 1}. ${describeVideo(video)}`);
-  });
-
-  while (true) {
-    const answer = await askQuestion(`请选择要下载的视频序号 (1-${videos.length}): `);
-    const selectedIndex = Number.parseInt(answer, 10) - 1;
-
-    if (selectedIndex >= 0 && selectedIndex < videos.length) {
-      return videos[selectedIndex];
-    }
-
-    console.log('输入无效，请重新输入。');
-  }
 }
 
 function getRequestHeaders(referer, cookieHeader = '') {
@@ -296,7 +233,7 @@ function getRequestHeaders(referer, cookieHeader = '') {
   };
 }
 
-async function downloadToFile(videoUrl, outputPath, referer = videoUrl, cookieHeader = '') {
+async function downloadToFile(videoUrl, outputPath, referer = videoUrl, cookieHeader = '', onProgress) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const response = await axios({
@@ -312,37 +249,38 @@ async function downloadToFile(videoUrl, outputPath, referer = videoUrl, cookieHe
 
   response.data.on('data', (chunk) => {
     downloadedLength += chunk.length;
-
-    if (totalLength) {
-      const percent = ((downloadedLength / totalLength) * 100).toFixed(2);
-      process.stdout.write(
-        `\r下载中: ${percent}% (${formatBytes(downloadedLength)} / ${formatBytes(totalLength)})`,
+    if (onProgress) {
+      onProgress(
+        totalLength
+          ? `下载中: ${((downloadedLength / totalLength) * 100).toFixed(2)}% (${formatBytes(
+              downloadedLength,
+            )} / ${formatBytes(totalLength)})`
+          : `下载中: ${formatBytes(downloadedLength)}`,
       );
-    } else {
-      process.stdout.write(`\r下载中: ${formatBytes(downloadedLength)}`);
     }
   });
 
   await new Promise((resolve, reject) => {
     const writer = fs.createWriteStream(outputPath);
-
     response.data.pipe(writer);
     writer.on('finish', resolve);
     writer.on('error', reject);
     response.data.on('error', reject);
   });
 
-  process.stdout.write('\n');
   return outputPath;
 }
 
-async function downloadVideo(videoUrl, outputDir, index = 0, referer = videoUrl, cookieHeader = '') {
+async function downloadVideo(videoUrl, outputDir, index = 0, referer = videoUrl, cookieHeader = '', onProgress) {
   fs.mkdirSync(outputDir, { recursive: true });
-
   const fileName = getFileNameFromUrl(videoUrl, index);
-  const outputPath = path.join(outputDir, fileName);
-
-  return downloadToFile(videoUrl, outputPath, referer, cookieHeader);
+  return downloadToFile(
+    videoUrl,
+    path.join(outputDir, fileName),
+    referer,
+    cookieHeader,
+    onProgress,
+  );
 }
 
 function hasFfmpeg() {
@@ -352,34 +290,21 @@ function hasFfmpeg() {
 
 async function mergeWithFfmpeg(videoPath, audioPath, outputPath) {
   await new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', [
-      '-y',
-      '-i',
-      videoPath,
-      '-i',
-      audioPath,
-      '-c',
-      'copy',
-      outputPath,
-    ], {
-      stdio: 'inherit',
+    const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-i', audioPath, '-c', 'copy', outputPath], {
+      stdio: 'ignore',
     });
 
     ffmpeg.on('error', reject);
     ffmpeg.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(`ffmpeg 合并失败，退出码: ${code}`));
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg 合并失败，退出码: ${code}`));
     });
   });
 
   return outputPath;
 }
 
-async function downloadBilibiliDash(video, outputDir, index, referer) {
+async function downloadBilibiliDash(video, outputDir, index, referer, onProgress) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const baseName = getSafeFileName(`bilibili-${video.quality || index + 1}`, `bilibili-${index + 1}`);
@@ -387,88 +312,74 @@ async function downloadBilibiliDash(video, outputDir, index, referer) {
   const audioPath = path.join(outputDir, `${baseName}.audio.m4s`);
   const mergedPath = path.join(outputDir, `${baseName}.mp4`);
 
-  console.log(`开始下载视频流: ${video.src}`);
-  await downloadToFile(video.src, videoPath, referer, video.cookieHeader);
+  onProgress(`开始下载视频流: ${video.quality || index + 1}`);
+  await downloadToFile(video.src, videoPath, referer, video.cookieHeader, onProgress);
 
-  if (!video.audioSrc) {
-    return videoPath;
-  }
+  if (!video.audioSrc) return videoPath;
 
-  console.log(`开始下载音频流: ${video.audioSrc}`);
-  await downloadToFile(video.audioSrc, audioPath, referer, video.cookieHeader);
+  onProgress('开始下载音频流');
+  await downloadToFile(video.audioSrc, audioPath, referer, video.cookieHeader, onProgress);
 
   if (!hasFfmpeg()) {
     return {
       videoPath,
       audioPath,
-      message: '未检测到 ffmpeg，已分别保存视频流和音频流。安装 ffmpeg 后可自动合并为 mp4。',
+      message: '未检测到 ffmpeg，已分别保存视频流和音频流。',
     };
   }
 
-  console.log('开始合并音视频...');
+  onProgress('开始合并音视频');
   return mergeWithFfmpeg(videoPath, audioPath, mergedPath);
 }
 
-async function crawlVideo(pageUrl, outputDir = DEFAULT_OUTPUT_DIR) {
-  const videos = uniqueVideos(await collectVideos(pageUrl));
+async function crawlVideo(userOptions) {
+  const options = {
+    url: '',
+    outputDir: path.resolve(process.cwd(), 'downloads/videos'),
+    videoIndex: 0,
+    onProgress: () => {},
+    ...userOptions,
+  };
 
+  if (!options.url) throw new Error('请填写视频网页链接。');
+
+  options.onProgress('正在打开网页并识别视频资源。');
+  const videos = uniqueVideos(await collectVideos(options.url));
   if (videos.length === 0) {
     throw new Error('当前网页没有识别到 video 标签或 source 视频地址。');
   }
 
-  const selectedVideo = await selectVideo(videos);
-  const resolvedVideoUrl = resolveUrl(selectedVideo.src, pageUrl);
-  const resolvedOutputDir = path.resolve(outputDir);
+  const index = Math.min(Math.max(Number(options.videoIndex) || 0, 0), videos.length - 1);
+  const selectedVideo = videos[index];
+  const resolvedVideoUrl = resolveUrl(selectedVideo.src, options.url);
+  const resolvedOutputDir = path.resolve(options.outputDir);
+
+  options.onProgress(`已选择资源: ${describeVideo(selectedVideo)}`);
 
   if (selectedVideo.kind === 'bilibili-dash') {
-    return downloadBilibiliDash(
+    const result = await downloadBilibiliDash(
       {
         ...selectedVideo,
         src: resolvedVideoUrl,
-        audioSrc: resolveUrl(selectedVideo.audioSrc, pageUrl),
+        audioSrc: resolveUrl(selectedVideo.audioSrc, options.url),
       },
       resolvedOutputDir,
-      videos.indexOf(selectedVideo),
-      pageUrl,
+      index,
+      options.url,
+      options.onProgress,
     );
+    return { outputPath: result, videos: videos.map(describeVideo) };
   }
 
-  console.log(`开始下载: ${resolvedVideoUrl}`);
-  return downloadVideo(
+  const outputPath = await downloadVideo(
     resolvedVideoUrl,
     resolvedOutputDir,
-    videos.indexOf(selectedVideo),
-    pageUrl,
+    index,
+    options.url,
     selectedVideo.cookieHeader,
+    options.onProgress,
   );
-}
-
-async function main() {
-  const [, , pageUrl, outputDir = DEFAULT_OUTPUT_DIR] = process.argv;
-
-  if (!pageUrl) {
-    printUsage();
-    process.exitCode = 1;
-    return;
-  }
-
-  try {
-    const savedPath = await crawlVideo(pageUrl, outputDir);
-    if (typeof savedPath === 'string') {
-      console.log(`下载完成: ${savedPath}`);
-    } else {
-      console.log(savedPath.message);
-      console.log(`视频流: ${savedPath.videoPath}`);
-      console.log(`音频流: ${savedPath.audioPath}`);
-    }
-  } catch (error) {
-    console.error(`下载失败: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
-
-if (require.main === module) {
-  main();
+  return { outputPath, videos: videos.map(describeVideo) };
 }
 
 module.exports = {

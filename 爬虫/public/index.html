@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>爬虫控制台</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Crawler Console</p>
+          <h1>爬虫控制台</h1>
+          <p class="subtitle">输入链接，选择小说或视频任务，结果统一保存到 downloads 目录。</p>
+        </div>
+        <div class="status-pill">
+          <span></span>
+          本地服务运行中
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="tabs" role="tablist" aria-label="爬虫类型">
+          <button class="tab is-active" type="button" data-tab="novel">小说爬取</button>
+          <button class="tab" type="button" data-tab="video">视频爬取</button>
+        </div>
+
+        <form class="panel is-active" id="novelForm" data-panel="novel">
+          <label class="field field-full">
+            <span>小说目录页或章节页链接</span>
+            <input name="url" type="url" placeholder="https://example.com/book/123/" required />
+          </label>
+
+          <div class="grid">
+            <label class="field">
+              <span>章节链接选择器</span>
+              <input name="chapterLinkSelector" placeholder="#list a，可留空自动识别" />
+            </label>
+            <label class="field">
+              <span>正文选择器</span>
+              <input name="contentSelector" placeholder="#content，可留空自动识别" />
+            </label>
+            <label class="field">
+              <span>标题选择器</span>
+              <input name="titleSelector" placeholder="h1" />
+            </label>
+            <label class="field">
+              <span>导出文件名</span>
+              <input name="out" placeholder="我的小说.txt" />
+            </label>
+            <label class="field">
+              <span>开始章节</span>
+              <input name="start" type="number" min="1" value="1" />
+            </label>
+            <label class="field">
+              <span>章节数量</span>
+              <input name="limit" type="number" min="0" value="0" />
+            </label>
+            <label class="field">
+              <span>请求间隔(ms)</span>
+              <input name="delay" type="number" min="0" value="600" />
+            </label>
+            <label class="toggle">
+              <input name="single" type="checkbox" />
+              <span>单章模式</span>
+            </label>
+          </div>
+
+          <button class="primary" type="submit">开始爬取小说</button>
+        </form>
+
+        <form class="panel" id="videoForm" data-panel="video">
+          <label class="field field-full">
+            <span>视频网页链接</span>
+            <input name="url" type="url" placeholder="https://example.com/video-page" required />
+          </label>
+          <label class="field">
+            <span>资源序号</span>
+            <input name="videoIndex" type="number" min="0" value="0" />
+          </label>
+          <button class="primary" type="submit">开始爬取视频</button>
+        </form>
+      </section>
+
+      <section class="result">
+        <div class="result-header">
+          <div>
+            <p class="eyebrow">Task Output</p>
+            <h2>任务结果</h2>
+          </div>
+          <button id="clearLog" class="ghost" type="button">清空</button>
+        </div>
+        <div id="message" class="message">等待任务提交。</div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

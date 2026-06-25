@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">Crawler Console</p>
           <h1>爬虫控制台</h1>
-          <p class="subtitle">输入链接，选择小说或视频任务，结果统一保存到 downloads 目录。</p>
+          <p class="subtitle">输入链接，选择小说或视频任务，完成后由浏览器下载结果文件。</p>
         </div>
         <div class="status-pill">
           <span></span>
@@ -24,6 +24,7 @@
         <div class="tabs" role="tablist" aria-label="爬虫类型">
           <button class="tab is-active" type="button" data-tab="novel">小说爬取</button>
           <button class="tab" type="button" data-tab="video">视频爬取</button>
+          <button class="tab" type="button" data-tab="sales">销量分析</button>
         </div>
 
         <form class="panel is-active" id="novelForm" data-panel="novel">
@@ -82,6 +83,50 @@
             <button class="primary" id="downloadVideo" type="button">下载选中视频</button>
           </div>
         </form>
+
+        <form class="panel" id="salesForm" data-panel="sales">
+          <div class="auth-actions">
+            <button class="ghost" id="loginTaobao" type="button">登录淘宝</button>
+            <button class="ghost" id="loginJd" type="button">登录京东</button>
+          </div>
+          <div class="grid">
+            <label class="field">
+              <span>商品类别</span>
+              <input name="keyword" placeholder="例如：无线耳机、露营灯、儿童书包" required />
+            </label>
+            <label class="field">
+              <span>榜单数量</span>
+              <input name="limit" type="number" min="5" max="50" value="20" />
+            </label>
+          </div>
+          <button class="primary" type="submit">开始分析销量</button>
+        </form>
+      </section>
+
+      <section class="sales-output" id="salesOutput" hidden>
+        <div class="result-header">
+          <div>
+            <p class="eyebrow">Sales Ranking</p>
+            <h2>销量榜单</h2>
+          </div>
+          <div class="sales-meta" id="salesMeta"></div>
+        </div>
+        <div class="chart" id="salesChart"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>平台</th>
+                <th>商品</th>
+                <th>价格</th>
+                <th>销量/热度</th>
+                <th>店铺</th>
+              </tr>
+            </thead>
+            <tbody id="salesTable"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="result">
@@ -97,6 +142,7 @@
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

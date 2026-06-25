@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 
 const http = require('http');
+const fsSync = require('fs');
 const fs = require('fs/promises');
+const os = require('os');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { URL } = require('url');
 const { crawlNovel } = require('./crawlers/novel');
 const { crawlVideo, getVideoResources } = require('./crawlers/video');
+const { crawlSales, loginSalesPlatform } = require('./crawlers/sales');
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const DOWNLOAD_DIR = path.join(ROOT_DIR, 'downloads');
+const TEMP_DOWNLOAD_DIR = path.join(os.tmpdir(), 'crawler-suite-downloads');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -25,6 +30,7 @@ const MIME_TYPES = {
 
 const jobs = new Map();
 const videoResourceCache = new Map();
+const browserDownloads = new Map();
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.json'] });
@@ -51,6 +57,41 @@ function getDownloadUrl(filePath) {
   const relative = path.relative(DOWNLOAD_DIR, filePath);
   if (relative.startsWith('..')) return '';
   return `/downloads/${relative.split(path.sep).map(encodeURIComponent).join('/')}`;
+}
+
+async function createBrowserOutputDir(type) {
+  await fs.mkdir(TEMP_DOWNLOAD_DIR, { recursive: true });
+  return fs.mkdtemp(path.join(TEMP_DOWNLOAD_DIR, `${type}-`));
+}
+
+function registerBrowserDownload(filePath, cleanupDir = path.dirname(filePath)) {
+  const id = randomUUID();
+  const timeout = setTimeout(() => {
+    cleanupBrowserDownload(id);
+  }, 60 * 60 * 1000);
+
+  browserDownloads.set(id, {
+    filePath,
+    cleanupDir,
+    timeout,
+  });
+
+  return `/api/downloads/${encodeURIComponent(id)}`;
+}
+
+function cleanupBrowserDownload(id) {
+  const item = browserDownloads.get(id);
+  if (!item) return;
+
+  clearTimeout(item.timeout);
+  browserDownloads.delete(id);
+  fs.rm(item.cleanupDir, { recursive: true, force: true }).catch(() => {});
+}
+
+function getAttachmentFileName(filePath) {
+  const fileName = path.basename(filePath);
+  const fallback = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 function createJob(type, runner) {
@@ -142,20 +183,42 @@ function streamJob(req, res, jobId) {
   });
 }
 
-async function serveFile(res, filePath) {
+async function serveFile(res, filePath, attachment = false) {
   try {
     const extension = path.extname(filePath);
-    const content = await fs.readFile(filePath);
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[extension] || 'application/octet-stream' });
-    res.end(content);
+    const stats = await fs.stat(filePath);
+    const headers = {
+      'Content-Type': MIME_TYPES[extension] || 'application/octet-stream',
+      'Content-Length': stats.size,
+    };
+    if (attachment) {
+      headers['Content-Disposition'] = getAttachmentFileName(filePath);
+    }
+    res.writeHead(200, headers);
+
+    const stream = fsSync.createReadStream(filePath);
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   } catch (error) {
     sendError(res, error.code === 'ENOENT' ? 404 : 500, '文件不存在。');
   }
 }
 
+async function serveBrowserDownload(res, id) {
+  const item = browserDownloads.get(id);
+  if (!item) {
+    sendError(res, 404, '下载文件已过期，请重新执行任务。');
+    return;
+  }
+
+  res.on('finish', () => cleanupBrowserDownload(id));
+  await serveFile(res, item.filePath, true);
+}
+
 async function serveStatic(req, res, pathname) {
-  const baseDir = pathname.startsWith('/downloads/') ? DOWNLOAD_DIR : PUBLIC_DIR;
-  const relativePath = pathname.startsWith('/downloads/')
+  const isDownload = pathname.startsWith('/downloads/');
+  const baseDir = isDownload ? DOWNLOAD_DIR : PUBLIC_DIR;
+  const relativePath = isDownload
     ? decodeURIComponent(pathname.replace('/downloads/', ''))
     : decodeURIComponent(pathname === '/' ? 'index.html' : pathname.slice(1));
   const filePath = path.resolve(baseDir, relativePath);
@@ -165,12 +228,13 @@ async function serveStatic(req, res, pathname) {
     return;
   }
 
-  await serveFile(res, filePath);
+  await serveFile(res, filePath, isDownload);
 }
 
 async function handleNovel(req, res) {
   const body = await readJsonBody(req);
   const job = createJob('novel', async (addLog) => {
+    const outputDir = await createBrowserOutputDir('novel');
     const result = await crawlNovel({
       url: body.url,
       out: body.out,
@@ -181,14 +245,17 @@ async function handleNovel(req, res) {
       limit: Math.max(0, Math.trunc(toNumber(body.limit, 0))),
       delay: Math.max(0, Math.trunc(toNumber(body.delay, 600))),
       single: Boolean(body.single),
-      outputDir: path.join(DOWNLOAD_DIR, 'novels'),
+      outputDir,
       onProgress: addLog,
+    }).catch(async (error) => {
+      await fs.rm(outputDir, { recursive: true, force: true });
+      throw error;
     });
 
     return {
       type: 'novel',
       outputPath: result.outputPath,
-      downloadUrl: getDownloadUrl(result.outputPath),
+      downloadUrl: registerBrowserDownload(result.outputPath, outputDir),
       chapters: result.chapters,
     };
   });
@@ -202,24 +269,30 @@ async function handleNovel(req, res) {
 async function handleVideo(req, res) {
   const body = await readJsonBody(req);
   const job = createJob('video', async (addLog) => {
+    const outputDir = await createBrowserOutputDir('video');
     const cached = body.resourceId ? videoResourceCache.get(body.resourceId) : null;
     if (body.resourceId && !cached) {
+      await fs.rm(outputDir, { recursive: true, force: true });
       throw new Error('视频资源已过期，请重新识别。');
     }
 
     const result = await crawlVideo({
-      url: cached?.url || body.url,
-      videos: cached?.videos,
-      videoIndex: Math.max(0, Math.trunc(toNumber(body.videoIndex, 0))),
-      outputDir: path.join(DOWNLOAD_DIR, 'videos'),
-      onProgress: addLog,
-    });
+        url: cached?.url || body.url,
+        videos: cached?.videos,
+        videoIndex: Math.max(0, Math.trunc(toNumber(body.videoIndex, 0))),
+        outputDir,
+        onProgress: addLog,
+      })
+      .catch(async (error) => {
+        await fs.rm(outputDir, { recursive: true, force: true });
+        throw error;
+      });
     const outputPath = typeof result.outputPath === 'string' ? result.outputPath : '';
 
     return {
       type: 'video',
       outputPath,
-      downloadUrl: outputPath ? getDownloadUrl(outputPath) : '',
+      downloadUrl: outputPath ? registerBrowserDownload(outputPath, outputDir) : '',
       result: result.outputPath,
       videos: result.videos,
     };
@@ -256,6 +329,43 @@ async function handleVideoResources(req, res) {
   });
 }
 
+async function handleSales(req, res) {
+  const body = await readJsonBody(req);
+  const job = createJob('sales', async (addLog) => {
+    const result = await crawlSales({
+      keyword: body.keyword,
+      limit: Math.max(5, Math.trunc(toNumber(body.limit, 20))),
+      storageDir: path.join(DOWNLOAD_DIR, 'sales'),
+      onProgress: addLog,
+    });
+
+    return result;
+  });
+
+  sendJson(res, 202, {
+    ok: true,
+    jobId: job.id,
+  });
+}
+
+async function handleSalesAuth(req, res) {
+  const body = await readJsonBody(req);
+  const job = createJob('sales-auth', async (addLog) => {
+    const result = await loginSalesPlatform({
+      platform: body.platform,
+      storageDir: path.join(DOWNLOAD_DIR, 'sales'),
+      onProgress: addLog,
+    });
+
+    return result;
+  });
+
+  sendJson(res, 202, {
+    ok: true,
+    jobId: job.id,
+  });
+}
+
 async function route(req, res) {
   const { pathname } = new URL(req.url, `http://${req.headers.host}`);
 
@@ -275,8 +385,23 @@ async function route(req, res) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/sales') {
+      await handleSales(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/sales/auth') {
+      await handleSalesAuth(req, res);
+      return;
+    }
+
     if (req.method === 'GET' && pathname.startsWith('/api/jobs/')) {
       streamJob(req, res, pathname.replace('/api/jobs/', ''));
+      return;
+    }
+
+    if (req.method === 'GET' && pathname.startsWith('/api/downloads/')) {
+      await serveBrowserDownload(res, decodeURIComponent(pathname.replace('/api/downloads/', '')));
       return;
     }
 
@@ -292,8 +417,8 @@ async function route(req, res) {
 }
 
 async function main() {
-  await fs.mkdir(path.join(DOWNLOAD_DIR, 'novels'), { recursive: true });
-  await fs.mkdir(path.join(DOWNLOAD_DIR, 'videos'), { recursive: true });
+  await fs.mkdir(TEMP_DOWNLOAD_DIR, { recursive: true });
+  await fs.mkdir(path.join(DOWNLOAD_DIR, 'sales'), { recursive: true });
 
   http.createServer(route).listen(PORT, HOST, () => {
     console.log(`爬虫主页面已启动: http://${HOST}:${PORT}`);

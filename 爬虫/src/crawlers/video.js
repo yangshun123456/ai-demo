@@ -3,6 +3,17 @@ const path = require('path');
 const { URL } = require('url');
 const axios = require('axios');
 const { chromium } = require('playwright');
+const {
+  EncodedAudioPacketSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  FilePathSource,
+  FilePathTarget,
+  Input,
+  MP4,
+  Mp4OutputFormat,
+  Output,
+} = require('mediabunny');
 
 function resolveUrl(src, pageUrl) {
   if (!src) return '';
@@ -330,12 +341,91 @@ async function downloadVideo(videoUrl, outputDir, index = 0, referer = videoUrl,
   );
 }
 
+function createMp4Input(filePath) {
+  return new Input({
+    formats: [MP4],
+    source: new FilePathSource(filePath),
+  });
+}
+
+async function copyEncodedPackets(inputTrack, outputSource, decoderConfig, onProgress, label) {
+  const sink = new EncodedPacketSink(inputTrack);
+  let packetCount = 0;
+
+  for await (const packet of sink.packets()) {
+    await outputSource.add(packet, packetCount === 0 ? { decoderConfig } : undefined);
+    packetCount += 1;
+    if (packetCount % 2000 === 0) {
+      onProgress(`合并${label}: 已处理 ${packetCount} 个数据包`);
+    }
+  }
+
+  outputSource.close();
+  return packetCount;
+}
+
+async function mergeDashToMp4(videoPath, audioPath, outputPath, onProgress) {
+  const videoInput = createMp4Input(videoPath);
+  const audioInput = audioPath ? createMp4Input(audioPath) : null;
+
+  try {
+    const videoTrack = await videoInput.getPrimaryVideoTrack();
+    if (!videoTrack) throw new Error('视频流里没有识别到视频轨道。');
+
+    const audioTrack = audioInput ? await audioInput.getPrimaryAudioTrack() : null;
+    const videoCodec = await videoTrack.getCodec();
+    if (!videoCodec) throw new Error('无法识别视频编码，不能合并。');
+
+    const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
+    const output = new Output({
+      format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+      target: new FilePathTarget(outputPath),
+    });
+    const videoSource = new EncodedVideoPacketSource(videoCodec);
+    const audioSource = audioCodec ? new EncodedAudioPacketSource(audioCodec) : null;
+
+    output.addVideoTrack(videoSource, {
+      name: await videoTrack.getName() ?? undefined,
+    });
+    if (audioTrack && audioSource) {
+      output.addAudioTrack(audioSource, {
+        languageCode: await audioTrack.getLanguageCode(),
+        name: await audioTrack.getName() ?? undefined,
+      });
+    }
+
+    await output.start();
+
+    onProgress('正在合并视频和音频为 MP4。');
+    const videoDecoderConfig = await videoTrack.getDecoderConfig();
+    if (!videoDecoderConfig) throw new Error('无法读取视频解码配置，不能合并。');
+
+    const videoPromise = copyEncodedPackets(videoTrack, videoSource, videoDecoderConfig, onProgress, '视频');
+    const audioPromise = audioTrack && audioSource
+      ? (async () => {
+          const audioDecoderConfig = await audioTrack.getDecoderConfig();
+          if (!audioDecoderConfig) throw new Error('无法读取音频解码配置，不能合并。');
+          return copyEncodedPackets(audioTrack, audioSource, audioDecoderConfig, onProgress, '音频');
+        })()
+      : Promise.resolve(0);
+
+    const [videoPackets, audioPackets] = await Promise.all([videoPromise, audioPromise]);
+    await output.finalize();
+    onProgress(`合并完成: 视频 ${videoPackets} 包${audioPackets ? `，音频 ${audioPackets} 包` : ''}`);
+    return outputPath;
+  } finally {
+    videoInput.dispose();
+    audioInput?.dispose();
+  }
+}
+
 async function downloadBilibiliDash(video, outputDir, index, referer, onProgress) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const baseName = getSafeFileName(`bilibili-${video.quality || index + 1}`, `bilibili-${index + 1}`);
   const videoPath = path.join(outputDir, `${baseName}.video.m4s`);
   const audioPath = path.join(outputDir, `${baseName}.audio.m4s`);
+  const outputPath = path.join(outputDir, `${baseName}.mp4`);
 
   onProgress(`开始下载视频流: ${video.quality || index + 1}`);
   await downloadToFile(video.src, videoPath, referer, video.cookieHeader, onProgress);
@@ -345,9 +435,16 @@ async function downloadBilibiliDash(video, outputDir, index, referer, onProgress
     await downloadToFile(video.audioSrc, audioPath, referer, video.cookieHeader, onProgress);
   }
 
-  throw new Error(
-    `当前只识别到 DASH 分离流，已保存 m4s 到 ${outputDir}。不使用 ffmpeg 时无法把独立音频轨和视频轨封装成一个 mp4，请选择“Bilibili 完整视频”资源序号重试。`,
-  );
+  await mergeDashToMp4(videoPath, video.audioSrc ? audioPath : '', outputPath, onProgress);
+
+  try {
+    fs.rmSync(videoPath, { force: true });
+    fs.rmSync(audioPath, { force: true });
+  } catch {
+    // 中间文件清理失败不影响最终下载。
+  }
+
+  return outputPath;
 }
 
 async function downloadBilibiliProgressive(video, outputDir, index, referer, onProgress) {

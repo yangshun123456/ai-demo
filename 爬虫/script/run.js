@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const projectRoot = path.resolve(__dirname, '..');
-const port = Number(process.env.PORT || 3000);
+const port = process.env.PORT || 3000;
 const host = process.env.HOST || '127.0.0.1';
 const url = `http://${host}:${port}`;
 
@@ -61,7 +61,7 @@ async function main() {
     env: {
       ...process.env,
       HOST: host,
-      PORT: String(port),
+      PORT: port,
     },
   });
 

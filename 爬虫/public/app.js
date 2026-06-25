@@ -7,8 +7,16 @@ const videoForm = document.querySelector('#videoForm');
 const videoResources = document.querySelector('#videoResources');
 const videoResourceList = document.querySelector('#videoResourceList');
 const downloadVideo = document.querySelector('#downloadVideo');
+const salesForm = document.querySelector('#salesForm');
+const salesOutput = document.querySelector('#salesOutput');
+const salesMeta = document.querySelector('#salesMeta');
+const salesTable = document.querySelector('#salesTable');
+const salesChartEl = document.querySelector('#salesChart');
+const loginTaobao = document.querySelector('#loginTaobao');
+const loginJd = document.querySelector('#loginJd');
 let currentEvents = null;
 let currentVideoResourceId = '';
+let salesChart = null;
 
 function setActiveTab(name) {
   tabs.forEach((tab) => tab.classList.toggle('is-active', tab.dataset.tab === name));
@@ -20,9 +28,32 @@ function appendLog(lines) {
   log.textContent = nextLines.filter(Boolean).join('\n');
 }
 
+function getDownloadFileName(downloadUrl) {
+  const encodedName = String(downloadUrl || '').split('/').pop() || 'download';
+  try {
+    return decodeURIComponent(encodedName);
+  } catch (error) {
+    return encodedName;
+  }
+}
+
+function triggerBrowserDownload(downloadUrl) {
+  if (!downloadUrl) return;
+
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  link.download = getDownloadFileName(downloadUrl);
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 function setMessage(text, downloadUrl) {
   if (downloadUrl) {
-    message.innerHTML = `${text} <a href="${downloadUrl}" target="_blank" rel="noreferrer">打开文件</a>`;
+    message.innerHTML = `${text} <a href="${downloadUrl}" download="${escapeHtml(
+      getDownloadFileName(downloadUrl),
+    )}">重新下载</a>`;
     return;
   }
   message.textContent = text;
@@ -46,6 +77,13 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function formatNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return '未识别';
+  if (number >= 10000) return `${(number / 10000).toFixed(number >= 100000 ? 0 : 1)}万`;
+  return number.toLocaleString('zh-CN');
 }
 
 async function submitTask(form, endpoint, pendingText, options = {}) {
@@ -121,7 +159,8 @@ function finishTask(result, button, onDone) {
   if (onDone) {
     onDone(result);
   } else {
-    setMessage(`完成，文件已保存到 ${result?.outputPath || 'downloads 目录'}。`, result?.downloadUrl);
+    triggerBrowserDownload(result?.downloadUrl);
+    setMessage('完成，文件已发送到浏览器下载。', result?.downloadUrl);
   }
   button.disabled = false;
   if (currentEvents) {
@@ -157,6 +196,93 @@ function renderVideoResources(result) {
   setMessage('请选择要下载的视频资源。');
 }
 
+function renderSalesResult(result) {
+  const products = result?.products || [];
+  salesOutput.hidden = products.length === 0;
+
+  if (!products.length) {
+    setMessage('没有抓取到销量数据。');
+    return;
+  }
+
+  const platformText = (result.platforms || [])
+    .map((platform) => {
+      if (platform.ok) return `${platform.platform} ${platform.count} 条`;
+      return `${platform.platform} 失败`;
+    })
+    .join(' / ');
+
+  salesMeta.textContent = `${result.keyword || ''} · ${platformText}`;
+  salesTable.innerHTML = products
+    .map((product) => {
+      const title = escapeHtml(product.title);
+      const link = product.link
+        ? `<a class="product-link" href="${escapeHtml(product.link)}" target="_blank" rel="noreferrer">${title}</a>`
+        : `<span class="product-link">${title}</span>`;
+      return `
+        <tr>
+          <td>${product.rank}</td>
+          <td>${escapeHtml(product.platform)}</td>
+          <td>${link}</td>
+          <td>${escapeHtml(product.price || '-')}</td>
+          <td>${escapeHtml(product.salesText || formatNumber(product.sales))}</td>
+          <td><span class="muted">${escapeHtml(product.shop || '-')}</span></td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  renderSalesChart(products.slice(0, 12));
+  setMessage(`销量分析完成，共生成 ${products.length} 条榜单数据。`);
+}
+
+function renderSalesChart(products) {
+  if (!window.echarts) {
+    salesChartEl.innerHTML = '<div class="message">ECharts 加载失败，已保留表格结果。</div>';
+    return;
+  }
+
+  if (!salesChart) {
+    salesChart = window.echarts.init(salesChartEl);
+    window.addEventListener('resize', () => salesChart?.resize());
+  }
+
+  salesChart.setOption({
+    color: ['#2563eb', '#16a34a'],
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter(items) {
+        const item = items[0];
+        const product = products[item.dataIndex];
+        return `${escapeHtml(product.platform)}<br/>${escapeHtml(product.title)}<br/>销量/热度：${formatNumber(product.sales)}`;
+      },
+    },
+    grid: { left: 72, right: 28, top: 24, bottom: 72 },
+    xAxis: {
+      type: 'category',
+      data: products.map((product) => `${product.rank}.${product.platform}`),
+      axisLabel: { interval: 0, rotate: 35 },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        formatter(value) {
+          return formatNumber(value);
+        },
+      },
+    },
+    series: [
+      {
+        name: '销量/热度',
+        type: 'bar',
+        data: products.map((product) => product.sales || 0),
+        barMaxWidth: 36,
+      },
+    ],
+  });
+}
+
 function failTask(error, logs, button) {
   setMessage(`失败：${error || '任务失败'}`);
   if (logs) appendLog(logs);
@@ -182,6 +308,34 @@ videoForm.addEventListener('submit', (event) => {
   currentVideoResourceId = '';
   submitTask(event.currentTarget, '/api/video/resources', '正在识别视频资源，请稍等。', {
     onDone: renderVideoResources,
+  });
+});
+
+salesForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  salesOutput.hidden = true;
+  submitTask(event.currentTarget, '/api/sales', '正在抓取淘宝、京东销量数据，请稍等。', {
+    onDone: renderSalesResult,
+  });
+});
+
+loginTaobao.addEventListener('click', () => {
+  submitTask(salesForm, '/api/sales/auth', '正在打开淘宝登录窗口。登录完成后会保存登录态。', {
+    button: loginTaobao,
+    body: { platform: 'taobao' },
+    onDone() {
+      setMessage('淘宝登录态已保存，可以开始销量分析。');
+    },
+  });
+});
+
+loginJd.addEventListener('click', () => {
+  submitTask(salesForm, '/api/sales/auth', '正在打开京东登录窗口。登录完成后会保存登录态。', {
+    button: loginJd,
+    body: { platform: 'jd' },
+    onDone() {
+      setMessage('京东登录态已保存，可以开始销量分析。');
+    },
   });
 });
 
@@ -211,5 +365,6 @@ clearLog.addEventListener('click', () => {
   setMessage('等待任务提交。');
   appendLog('');
   videoResources.hidden = true;
+  salesOutput.hidden = true;
   currentVideoResourceId = '';
 });

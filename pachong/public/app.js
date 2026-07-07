@@ -184,8 +184,9 @@ function renderMovieResult(result) {
   movieTable.innerHTML = movies
     .map((m) => {
       const title = escapeHtml(m.title);
+      const actionText = m.type === '官方平台搜索' || m.type === '公开档案搜索' ? '打开搜索' : '查看资源';
       const link = m.link
-        ? `<a class="product-link" href="${escapeHtml(m.link)}" target="_blank" rel="noreferrer">点击观看</a>`
+        ? `<a class="product-link" href="${escapeHtml(m.link)}" target="_blank" rel="noreferrer">${actionText}</a>`
         : `<span class="muted">暂无链接</span>`;
       return `
         <tr>
@@ -197,7 +198,7 @@ function renderMovieResult(result) {
     })
     .join('');
 
-  setMessage(`搜索完成，为您找到 ${movies.length} 个平台的资源链接。`);
+  setMessage(`搜索完成，为您找到 ${movies.length} 条公开资源或官方搜索入口。`);
 }
 
 function renderVideoResources(result) {

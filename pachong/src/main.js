@@ -16,7 +16,9 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
-const DOWNLOAD_DIR = path.join(ROOT_DIR, 'downloads');
+const DOWNLOAD_DIR = process.env.CRAWLER_DOWNLOAD_DIR
+  ? path.resolve(process.env.CRAWLER_DOWNLOAD_DIR)
+  : path.join(ROOT_DIR, 'downloads');
 const TEMP_DOWNLOAD_DIR = path.join(os.tmpdir(), 'crawler-suite-downloads');
 
 const MIME_TYPES = {
@@ -438,13 +440,35 @@ async function route(req, res) {
   }
 }
 
-async function main() {
+async function startServer(options = {}) {
+  const host = options.host || HOST;
+  const port = options.port ?? PORT;
+
   await fs.mkdir(TEMP_DOWNLOAD_DIR, { recursive: true });
   await fs.mkdir(path.join(DOWNLOAD_DIR, 'sales'), { recursive: true });
 
-  http.createServer(route).listen(PORT, HOST, () => {
-    console.log(`爬虫主页面已启动: http://${HOST}:${PORT}`);
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(route);
+
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      const address = server.address();
+      const actualPort = typeof address === 'object' && address ? address.port : port;
+      const url = `http://${host}:${actualPort}`;
+      console.log(`爬虫主页面已启动: ${url}`);
+      resolve({
+        server,
+        host,
+        port: actualPort,
+        url,
+      });
+    });
   });
+}
+
+async function main() {
+  await startServer();
 }
 
 if (require.main === module) {
@@ -453,3 +477,7 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+
+module.exports = {
+  startServer,
+};

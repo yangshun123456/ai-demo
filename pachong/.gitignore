@@ -1,2 +1,4 @@
 node_modules/
+dist/
+ms-playwright/
 .DS_Store

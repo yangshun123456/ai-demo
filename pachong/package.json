@@ -2,12 +2,20 @@
   "name": "crawler-suite",
   "version": "1.0.0",
   "private": true,
+  "productName": "爬虫控制台",
+  "author": "Crawler Suite",
   "description": "小说和视频爬虫合集，支持网页输入链接后下载。",
-  "main": "src/main.js",
+  "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/main.js",
-    "check": "node --check src/main.js && node --check src/crawlers/novel.js && node --check src/crawlers/video.js && node --check src/crawlers/sales.js"
+    "server": "node src/main.js",
+    "electron": "electron .",
+    "prepare:playwright": "node script/install-playwright-browsers.js",
+    "dist": "npm run prepare:playwright && electron-builder",
+    "dist:mac": "npm run prepare:playwright && electron-builder --mac",
+    "dist:win": "npm run prepare:playwright && electron-builder --win",
+    "check": "node --check src/main.js && node --check src/crawlers/novel.js && node --check src/crawlers/video.js && node --check src/crawlers/sales.js && node --check src/crawlers/movie.js && node --check electron/main.js && node --check script/install-playwright-browsers.js"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -15,6 +23,55 @@
     "iconv-lite": "^0.6.3",
     "mediabunny": "^1.49.0",
     "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.local.crawlersuite",
+    "productName": "爬虫控制台",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "src/**/*",
+      "script/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "ms-playwright",
+        "to": "ms-playwright",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/mediabunny/**/*",
+      "node_modules/playwright/**/*",
+      "node_modules/playwright-core/**/*"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "engines": {
     "node": ">=18"

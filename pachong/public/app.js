@@ -3,6 +3,9 @@ const panels = document.querySelectorAll('.panel');
 const message = document.querySelector('#message');
 const log = document.querySelector('#log');
 const clearLog = document.querySelector('#clearLog');
+const movieForm = document.querySelector('#movieForm');
+const movieOutput = document.querySelector('#movieOutput');
+const movieTable = document.querySelector('#movieTable');
 const videoForm = document.querySelector('#videoForm');
 const videoResources = document.querySelector('#videoResources');
 const videoResourceList = document.querySelector('#videoResourceList');
@@ -169,6 +172,34 @@ function finishTask(result, button, onDone) {
   }
 }
 
+function renderMovieResult(result) {
+  const movies = result?.movies || [];
+  movieOutput.hidden = movies.length === 0;
+
+  if (!movies.length) {
+    setMessage('没有找到相关的免费资源。');
+    return;
+  }
+
+  movieTable.innerHTML = movies
+    .map((m) => {
+      const title = escapeHtml(m.title);
+      const link = m.link
+        ? `<a class="product-link" href="${escapeHtml(m.link)}" target="_blank" rel="noreferrer">点击观看</a>`
+        : `<span class="muted">暂无链接</span>`;
+      return `
+        <tr>
+          <td>${title}</td>
+          <td>${escapeHtml(m.type || '-')}</td>
+          <td>${link}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  setMessage(`搜索完成，为您找到 ${movies.length} 个平台的资源链接。`);
+}
+
 function renderVideoResources(result) {
   currentVideoResourceId = result?.resourceId || '';
   const resources = result?.resources || [];
@@ -302,6 +333,14 @@ document.querySelector('#novelForm').addEventListener('submit', (event) => {
   submitTask(event.currentTarget, '/api/novel', '小说爬取中，章节较多时会需要一些时间。');
 });
 
+movieForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  movieOutput.hidden = true;
+  submitTask(event.currentTarget, '/api/movie', '正在搜索免费资源，请稍等...', {
+    onDone: renderMovieResult,
+  });
+});
+
 videoForm.addEventListener('submit', (event) => {
   event.preventDefault();
   videoResources.hidden = true;
@@ -364,6 +403,7 @@ downloadVideo.addEventListener('click', () => {
 clearLog.addEventListener('click', () => {
   setMessage('等待任务提交。');
   appendLog('');
+  movieOutput.hidden = true;
   videoResources.hidden = true;
   salesOutput.hidden = true;
   currentVideoResourceId = '';

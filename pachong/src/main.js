@@ -10,6 +10,7 @@ const { URL } = require('url');
 const { crawlNovel } = require('./crawlers/novel');
 const { crawlVideo, getVideoResources } = require('./crawlers/video');
 const { crawlSales, loginSalesPlatform } = require('./crawlers/sales');
+const { searchMovie } = require('./crawlers/movie');
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -366,12 +367,33 @@ async function handleSalesAuth(req, res) {
   });
 }
 
+async function handleMovie(req, res) {
+  const body = await readJsonBody(req);
+  const job = createJob('movie', async (addLog) => {
+    const result = await searchMovie({
+      keyword: body.keyword,
+      onProgress: addLog,
+    });
+    return result;
+  });
+
+  sendJson(res, 202, {
+    ok: true,
+    jobId: job.id,
+  });
+}
+
 async function route(req, res) {
   const { pathname } = new URL(req.url, `http://${req.headers.host}`);
 
   try {
     if (req.method === 'POST' && pathname === '/api/novel') {
       await handleNovel(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/movie') {
+      await handleMovie(req, res);
       return;
     }
 

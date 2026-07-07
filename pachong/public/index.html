@@ -23,6 +23,7 @@
       <section class="workspace">
         <div class="tabs" role="tablist" aria-label="爬虫类型">
           <button class="tab is-active" type="button" data-tab="novel">小说爬取</button>
+          <button class="tab" type="button" data-tab="movie">影视搜索</button>
           <button class="tab" type="button" data-tab="video">视频爬取</button>
           <button class="tab" type="button" data-tab="sales">销量分析</button>
         </div>
@@ -69,6 +70,14 @@
           </div>
 
           <button class="primary" type="submit">开始爬取小说</button>
+        </form>
+
+        <form class="panel" id="movieForm" data-panel="movie">
+          <label class="field field-full">
+            <span>输入想看的电影、电视剧、动漫名称</span>
+            <input name="keyword" placeholder="例如：仙剑奇侠传" required />
+          </label>
+          <button class="primary" type="submit">搜索免费资源</button>
         </form>
 
         <form class="panel" id="videoForm" data-panel="video">
@@ -125,6 +134,27 @@
               </tr>
             </thead>
             <tbody id="salesTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="movie-output" id="movieOutput" hidden>
+        <div class="result-header">
+          <div>
+            <p class="eyebrow">Search Results</p>
+            <h2>资源列表</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>资源名称</th>
+                <th>类型/状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="movieTable"></tbody>
           </table>
         </div>
       </section>

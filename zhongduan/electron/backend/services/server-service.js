@@ -12,7 +12,13 @@ import {
   renameRemoteFile,
   deleteRemoteFile,
   deleteRemoteDirectory,
-  createRemoteDirectory
+  createRemoteDirectory,
+  createRemoteFile,
+  executeRemoteCommand,
+  startTerminalSession,
+  writeTerminalSession,
+  resizeTerminalSession,
+  closeTerminalSession
 } from './ssh-service.js';
 
 export async function saveServerProfile(profile) {
@@ -78,6 +84,30 @@ export function deleteServerDirectory(profile, remotePath) {
 
 export function createServerDirectory(profile, remotePath) {
   return createRemoteDirectory(profile, remotePath);
+}
+
+export function createServerFile(profile, remotePath) {
+  return createRemoteFile(profile, remotePath);
+}
+
+export function executeServerCommand(profile, command, cwd, onStdout, onStderr, onClose) {
+  return executeRemoteCommand(profile, command, cwd, onStdout, onStderr, onClose);
+}
+
+export function startServerTerminalSession(profile, onData) {
+  return startTerminalSession(profile, onData);
+}
+
+export function writeServerTerminalSession(sessionId, data) {
+  return writeTerminalSession(sessionId, data);
+}
+
+export function resizeServerTerminalSession(sessionId, cols, rows) {
+  return resizeTerminalSession(sessionId, cols, rows);
+}
+
+export function closeServerTerminalSession(sessionId) {
+  return closeTerminalSession(sessionId);
 }
 
 export function writeServerFile(profile, remotePath, content) {

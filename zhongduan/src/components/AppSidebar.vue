@@ -1,5 +1,6 @@
 <script setup>
-import { Bot, Code2, FolderOpen, Server, Settings, TerminalSquare } from '@lucide/vue';
+import { computed } from 'vue';
+import { Bot, FolderOpen, Server, Settings, TerminalSquare } from '@lucide/vue';
 import { useRoute } from 'vue-router';
 import { useWorkspaceStore } from '../stores/workspace';
 
@@ -20,6 +21,11 @@ const props = defineProps({
 
 const workspace = useWorkspaceStore();
 const route = useRoute();
+const serverLabel = computed(() => {
+  const username = workspace.activeServer?.username || '-';
+  const host = workspace.activeServer?.host || '未连接';
+  return `${username}@${host}`;
+});
 
 function getNavClass(itemKey) {
   if (props.activeNav) {
@@ -45,8 +51,7 @@ function getNavClass(itemKey) {
     </div>
     <nav>
       <RouterLink :class="getNavClass('servers')" to="/servers"><Server :size="18" />服务器</RouterLink>
-      <RouterLink :class="getNavClass('files')" to="/files"><FolderOpen :size="18" />文件</RouterLink>
-      <a :class="getNavClass('editor')"><Code2 :size="18" />编辑器</a>
+      <RouterLink :class="getNavClass('files')" to="/files"><FolderOpen :size="18" />文件列表</RouterLink>
       <RouterLink :class="getNavClass('ai')" to="/ai"><Bot :size="18" />AI 助手</RouterLink>
       <a :class="getNavClass('settings')"><Settings :size="18" />设置</a>
     </nav>
@@ -54,9 +59,8 @@ function getNavClass(itemKey) {
       <span :class="workspace.connected ? 'pulse online' : 'pulse'" />
       <div>
         <strong>{{ workspace.connected ? 'Active Session' : 'Preview Session' }}</strong>
-        <p>{{ workspace.activeServer.username }}@{{ workspace.activeServer.host }}</p>
+        <p>{{ serverLabel }}</p>
       </div>
     </div>
   </aside>
 </template>
-

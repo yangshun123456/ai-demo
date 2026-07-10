@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { basename, posix } from 'node:path';
+import crypto from 'node:crypto';
 import { Client } from 'ssh2';
 import SftpClient from 'ssh2-sftp-client';
 
@@ -17,38 +18,14 @@ export function normalizeServerProfile(profile) {
 }
 
 export async function testServerConnection(profile) {
-  console.log(`[SSH Backend] 开始尝试建立测试连接...
-  - 服务器: ${profile.name}
-  - 地址: ${profile.host}:${profile.port}
-  - 用户名: ${profile.username}
-  - 认证方式: ${profile.privateKey ? 'SSH 私钥' : '密码'}`);
-
-  try {
-    const connection = await createConnection(profile);
-    console.log(`[SSH Backend] 测试连接成功: ${profile.name} (${profile.host})`);
-    connection.end();
-    return { ok: true, message: '连接成功' };
-  } catch (error) {
-    console.error(`[SSH Backend] 测试连接失败: ${profile.name} (${profile.host}), 错误: ${error.message}`);
-    throw error;
-  }
+  const connection = await createConnection(profile);
+  connection.end();
+  return { ok: true, message: '连接成功' };
 }
 
 async function connectSftp(sftp, profile) {
   const normalized = await prepareProfile(profile);
-  console.log(`[SFTP Connection] 正在与远程主机建立 SFTP 连接...
-  - 服务器: ${normalized.name}
-  - 地址: ${normalized.host}:${normalized.port}
-  - 用户名: ${normalized.username}
-  - 认证方式: ${normalized.privateKey ? 'SSH 私钥' : '密码'}`);
-
-  try {
-    await sftp.connect(toSsh2Config(normalized));
-    console.log(`[SFTP Connection] 与远程主机 ${normalized.host}:${normalized.port} 建立 SFTP 连接成功`);
-  } catch (error) {
-    console.error(`[SFTP Connection] 远程主机 ${normalized.host}:${normalized.port} SFTP 连接失败: ${error.message}`);
-    throw error;
-  }
+  await sftp.connect(toSsh2Config(normalized));
 }
 
 export async function listRemoteFiles(profile, remotePath) {
@@ -188,9 +165,103 @@ export async function createRemoteDirectory(profile, remotePath) {
   }
 }
 
+export async function createRemoteFile(profile, remotePath) {
+  const sftp = new SftpClient();
+  try {
+    await connectSftp(sftp, profile);
+    await sftp.put(Buffer.from(''), remotePath);
+    return { ok: true };
+  } finally {
+    await closeSftp(sftp);
+  }
+}
+
+export async function executeRemoteCommand(profile, command, cwd, onStdout, onStderr, onClose) {
+  const normalized = await prepareProfile(profile);
+  const client = new Client();
+  
+  return new Promise((resolve, reject) => {
+    client.on('ready', () => {
+      const execOptions = cwd ? { env: { PWD: cwd } } : {};
+      const fullCommand = cwd ? `cd "${cwd}" && ${command}` : command;
+      
+      client.exec(fullCommand, execOptions, (err, stream) => {
+        if (err) {
+          client.end();
+          return reject(err);
+        }
+        stream.on('close', (code, signal) => {
+          client.end();
+          if (onClose) onClose(code);
+        }).on('data', (data) => {
+          if (onStdout) onStdout(data.toString('utf8'));
+        }).stderr.on('data', (data) => {
+          if (onStderr) onStderr(data.toString('utf8'));
+        });
+        resolve({ ok: true });
+      });
+    }).on('error', (err) => {
+      reject(err);
+    }).connect(toSsh2Config(normalized));
+  });
+}
+
+const activeTerminals = new Map();
+
+export async function startTerminalSession(profile, onData) {
+  const normalized = await prepareProfile(profile);
+  const client = new Client();
+  const sessionId = crypto.randomUUID();
+
+  return new Promise((resolve, reject) => {
+    client.on('ready', () => {
+      client.shell((err, stream) => {
+        if (err) {
+          client.end();
+          return reject(err);
+        }
+        
+        activeTerminals.set(sessionId, { client, stream });
+
+        stream.on('close', () => {
+          client.end();
+          activeTerminals.delete(sessionId);
+        }).on('data', (data) => {
+          if (onData) onData(sessionId, data.toString('utf8'));
+        });
+        
+        resolve(sessionId);
+      });
+    }).on('error', (err) => {
+      reject(err);
+    }).connect(toSsh2Config(normalized));
+  });
+}
+
+export function writeTerminalSession(sessionId, data) {
+  const session = activeTerminals.get(sessionId);
+  if (session && session.stream) {
+    session.stream.write(data);
+  }
+}
+
+export function resizeTerminalSession(sessionId, cols, rows) {
+  const session = activeTerminals.get(sessionId);
+  if (session && session.stream && typeof session.stream.setWindow === 'function') {
+    session.stream.setWindow(rows, cols, 0, 0); // SSH2 setWindow signature: (rows, cols, height, width)
+  }
+}
+
+export function closeTerminalSession(sessionId) {
+  const session = activeTerminals.get(sessionId);
+  if (session) {
+    if (session.client) session.client.end();
+    activeTerminals.delete(sessionId);
+  }
+}
+
 async function createConnection(profile) {
   const normalized = await prepareProfile(profile);
-  console.log(`[SSH Connection] 正在与远程主机建立连接 ${normalized.host}:${normalized.port} as ${normalized.username}...`);
 
   return new Promise((resolve, reject) => {
     const client = new Client();
@@ -199,11 +270,9 @@ async function createConnection(profile) {
     client
       .on('ready', () => {
         settled = true;
-        console.log(`[SSH Connection] 与远程主机 ${normalized.host}:${normalized.port} 建立连接成功`);
         resolve(client);
       })
       .on('error', (error) => {
-        console.error(`[SSH Connection] 远程主机 ${normalized.host}:${normalized.port} 连接失败: ${error.message}`);
         if (!settled) reject(error);
       })
       .connect(toSsh2Config(normalized));

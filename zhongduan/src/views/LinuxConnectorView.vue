@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, ref, reactive, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { 
   Bell, HelpCircle, Loader2, Plus, X, Info, Rocket, 
   Eye, EyeOff, Check, AlertCircle, Trash2 
@@ -10,6 +11,7 @@ import StatusBar from '../components/StatusBar.vue';
 import { getRuntimeBridge } from '../services/runtime-bridge';
 
 const workspace = useWorkspaceStore();
+const router = useRouter();
 
 // 动态绑定全局 Pinia 中的服务器列表（读取自 config）
 const serversList = computed(() => workspace.servers);
@@ -267,6 +269,7 @@ async function startConnection(server, shouldSaveOnSuccess = false) {
           workspace.activeServer = serverToSave;
           workspace.status = `已连接到 ${serverToSave.name}`;
           workspace.refreshFiles(serverToSave, serverToSave.rootPath || '/').catch(() => {});
+          router.push('/files');
         }, 800);
       } else {
         throw new Error(result ? result.message : '连接超时，请检查凭证。');
@@ -300,6 +303,7 @@ async function startConnection(server, shouldSaveOnSuccess = false) {
           workspace.connected = true;
           workspace.activeServer = serverToSave;
           workspace.status = `已连接到 ${serverToSave.name} (预览模式)`;
+          router.push('/files');
         }, 1000);
       } else {
         connectionFailed.value = true;

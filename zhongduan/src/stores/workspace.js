@@ -51,8 +51,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const aiDraft = reactive({ ...fallbackAi });
   const remotePath = ref(fallbackServer.rootPath);
   const files = ref(demoFiles);
+  const fileListServerKey = ref('');
+  const directoryCache = ref({});
   const selectedFile = ref('nginx.conf');
   const editorContent = ref(demoContent);
+  const openTabs = ref([]);
+  const activeTab = ref(null);
+  const terminalLogs = ref([]);
   const dirty = ref(false);
   const connected = ref(false);
   const status = ref('离线预览模式');
@@ -135,38 +140,83 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function refreshFiles(profile = activeServer, path = remotePath.value) {
+  async function refreshFiles(profile = activeServer, path = remotePath.value, returnOnly = false) {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
-      files.value = await bridge.listFiles({ ...profile }, path);
+      const newFiles = await bridge.listFiles(JSON.parse(JSON.stringify(profile)), path);
+      cacheFiles(profile, path, newFiles);
+      if (returnOnly) {
+        return newFiles;
+      }
+      files.value = newFiles;
       remotePath.value = path;
+      fileListServerKey.value = getServerKey(profile);
       status.value = `已刷新 ${path}`;
+      return newFiles;
     } catch (error) {
       status.value = readableError(error, '读取目录失败，保留预览数据');
+      if (returnOnly) return [];
     } finally {
       busy.value = false;
     }
   }
 
-  async function openFile(file) {
-    if (file.type === 'd') {
-      await refreshFiles(activeServer, joinRemotePath(remotePath.value, file.name));
-      return;
-    }
-    selectedFile.value = file.name;
+  async function openFile(server, path, name) {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
-      editorContent.value = await bridge.readFile({ ...activeServer }, joinRemotePath(remotePath.value, file.name));
-      dirty.value = false;
-      status.value = `已打开 ${file.name}`;
+      const content = await bridge.readFile(JSON.parse(JSON.stringify(server)), path);
+      
+      const existingTab = openTabs.value.find(t => t.path === path);
+      if (existingTab) {
+        existingTab.content = content;
+        activeTab.value = existingTab;
+      } else {
+        const newTab = { name: name || path.split('/').pop(), path, content, originalContent: content, dirty: false };
+        openTabs.value.push(newTab);
+        activeTab.value = newTab;
+      }
+      status.value = `已打开 ${name || path}`;
     } catch {
-      editorContent.value = file.name === 'nginx.conf' ? demoContent : `# ${file.name}\n\n`;
-      dirty.value = false;
-      status.value = '远程文件读取失败，已打开本地预览内容';
+      status.value = '远程文件读取失败，保留原状态';
     } finally {
       busy.value = false;
+    }
+  }
+
+  async function openFileEntry(file) {
+    if (!file?.name) return;
+
+    const nextPath = joinRemotePath(remotePath.value, file.name);
+
+    if (file.type === 'd') {
+      await refreshFiles(activeServer, nextPath);
+      selectedFile.value = '';
+      return;
+    }
+
+    await openFile(activeServer, nextPath, file.name);
+  }
+
+  async function selectFileEntry(file) {
+    if (!file?.name) return;
+
+    if (file.type === 'd') {
+      await openFileEntry(file);
+      return;
+    }
+
+    selectedFile.value = file.name;
+  }
+
+  function closeTab(tabPath) {
+    const idx = openTabs.value.findIndex(t => t.path === tabPath);
+    if (idx !== -1) {
+      openTabs.value.splice(idx, 1);
+      if (activeTab.value?.path === tabPath) {
+        activeTab.value = openTabs.value[idx] || openTabs.value[idx - 1] || null;
+      }
     }
   }
 
@@ -254,18 +304,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function createDirectory(name) {
+  async function createDirectory(server, remotePath) {
+    if (!server?.host) return;
     busy.value = true;
+    status.value = '正在创建目录...';
     try {
       const bridge = getRuntimeBridge();
-      await bridge.createDirectory({ ...activeServer }, joinRemotePath(remotePath.value, name));
-      await refreshFiles();
-      status.value = `已创建文件夹 ${name}`;
+      await bridge.createDirectory(JSON.parse(JSON.stringify(server)), remotePath);
+      status.value = `目录已创建: ${remotePath}`;
     } catch (error) {
-      status.value = readableError(error, '创建文件夹失败');
+      status.value = `创建目录失败: ${readableError(error, '未知错误')}`;
     } finally {
       busy.value = false;
     }
+  }
+
+  async function createFile(server, remotePath) {
+    if (!server?.host) return;
+    busy.value = true;
+    status.value = '正在创建文件...';
+    try {
+      const bridge = getRuntimeBridge();
+      await bridge.createFile(JSON.parse(JSON.stringify(server)), remotePath);
+      status.value = `文件已创建: ${remotePath}`;
+    } catch (error) {
+      status.value = `创建文件失败: ${readableError(error, '未知错误')}`;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  function executeCommand(server, command, cwd, channelId) {
+    if (!server?.host) return;
+    const bridge = getRuntimeBridge();
+    bridge.executeCommand(channelId, JSON.parse(JSON.stringify(server)), command, cwd);
   }
 
   async function saveAiProfile() {
@@ -318,6 +390,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     refreshFiles(server, server.rootPath).catch(() => {});
   }
 
+  function getCachedFiles(profile = activeServer, path = remotePath.value) {
+    return directoryCache.value[getCacheKey(profile, path)] || null;
+  }
+
+  function hasCachedFiles(profile = activeServer, path = remotePath.value) {
+    return Boolean(getCachedFiles(profile, path));
+  }
+
+  function applyCachedFiles(profile = activeServer, path = remotePath.value) {
+    const cachedFiles = getCachedFiles(profile, path);
+    if (!cachedFiles) return false;
+    files.value = cachedFiles;
+    remotePath.value = path;
+    fileListServerKey.value = getServerKey(profile);
+    status.value = `已恢复 ${path}`;
+    return true;
+  }
+
   function selectAiProfile(profile) {
     assign(aiDraft, profile);
     const bridge = getRuntimeBridge();
@@ -328,6 +418,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     dirty.value = true;
   }
 
+  function cacheFiles(profile, path, nextFiles) {
+    directoryCache.value[getCacheKey(profile, path)] = nextFiles;
+  }
+
   return {
     servers,
     aiProfiles,
@@ -336,8 +430,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     aiDraft,
     remotePath,
     files,
+    fileListServerKey,
     selectedFile,
     editorContent,
+    openTabs,
+    activeTab,
+    terminalLogs,
     dirty,
     connected,
     status,
@@ -351,13 +449,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     saveServer,
     testConnection,
     refreshFiles,
+    getCachedFiles,
+    hasCachedFiles,
+    applyCachedFiles,
     openFile,
+    openFileEntry,
+    selectFileEntry,
     saveFile,
     uploadLocalFiles,
     downloadSelected,
     renameFile,
     deleteFile,
     createDirectory,
+    createFile,
+    executeCommand,
+    closeTab,
     saveAiProfile,
     sendMessage,
     selectServer,
@@ -373,6 +479,14 @@ function assign(target, source) {
 
 function joinRemotePath(base, name) {
   return `${base.replace(/\/$/, '')}/${name.replace(/^\//, '')}`;
+}
+
+function getServerKey(profile = {}) {
+  return profile.id || `${profile.username || ''}@${profile.host || ''}:${profile.port || 22}`;
+}
+
+function getCacheKey(profile, path) {
+  return `${getServerKey(profile)}::${path || '/'}`;
 }
 
 function readableError(error, fallback) {

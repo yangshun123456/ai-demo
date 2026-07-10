@@ -35,8 +35,8 @@ function formatSize(size) {
         v-for="file in workspace.files"
         :key="file.name"
         :class="['file-row', { selected: workspace.selectedFile === file.name }]"
-        @click="workspace.selectedFile = file.name"
-        @dblclick="workspace.openFile(file)"
+        @click="workspace.selectFileEntry(file)"
+        @dblclick="workspace.openFileEntry(file)"
       >
         <Folder v-if="file.type === 'd'" :size="18" />
         <FileText v-else :size="18" />

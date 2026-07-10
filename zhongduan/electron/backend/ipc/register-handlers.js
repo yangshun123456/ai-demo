@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron';
+import { dialog, ipcMain, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { readConfig } from '../repositories/config-repository.js';
 import { activateAiProfile, saveAiProfile, sendAiChat } from '../services/ai-service.js';
@@ -16,6 +16,12 @@ import {
   deleteServerFile,
   deleteServerDirectory,
   createServerDirectory,
+  createServerFile,
+  executeServerCommand,
+  startServerTerminalSession,
+  writeServerTerminalSession,
+  resizeServerTerminalSession,
+  closeServerTerminalSession,
   deleteServerProfile,
   deleteServerProfiles
 } from '../services/server-service.js';
@@ -53,6 +59,41 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('files:mkdir', (_event, profile, remotePath) => createServerDirectory(profile, remotePath));
 
+  ipcMain.handle('files:create-file', (_event, profile, remotePath) => createServerFile(profile, remotePath));
+
+  ipcMain.on('server:exec', async (event, channelId, profile, command, cwd) => {
+    try {
+      await executeServerCommand(
+        profile,
+        command,
+        cwd,
+        (data) => event.sender.send(`server:exec:stdout:${channelId}`, data),
+        (data) => event.sender.send(`server:exec:stderr:${channelId}`, data),
+        (code) => event.sender.send(`server:exec:close:${channelId}`, code)
+      );
+    } catch (err) {
+      event.sender.send(`server:exec:error:${channelId}`, err.message);
+    }
+  });
+
+  ipcMain.handle('terminal:start', async (event, profile) => {
+    return await startServerTerminalSession(profile, (sessionId, data) => {
+      event.sender.send(`terminal:incoming-data:${sessionId}`, data);
+    });
+  });
+
+  ipcMain.on('terminal:data', (_event, sessionId, data) => {
+    writeServerTerminalSession(sessionId, data);
+  });
+
+  ipcMain.on('terminal:resize', (_event, sessionId, cols, rows) => {
+    resizeServerTerminalSession(sessionId, cols, rows);
+  });
+
+  ipcMain.on('terminal:close', (_event, sessionId) => {
+    closeServerTerminalSession(sessionId);
+  });
+
   ipcMain.handle('files:upload', (_event, profile, localPath, remotePath) =>
     uploadServerFile(profile, localPath, remotePath)
   );
@@ -72,6 +113,11 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('local:write', async (_event, filePath, content) => {
     await writeFile(filePath, content, 'utf8');
+    return { ok: true };
+  });
+
+  ipcMain.handle('local:reveal-file', (_event, filePath) => {
+    shell.showItemInFolder(filePath);
     return { ok: true };
   });
 

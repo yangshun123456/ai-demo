@@ -1,0 +1,30 @@
+{
+  "name": "linux-ai-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI powered Linux server connector built with Electron and Vite.",
+  "main": "electron/bootstrap.js",
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "lint": "electron-vite build"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.24.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "monaco-editor": "^0.52.0",
+    "pinia": "^2.3.0",
+    "ssh2": "^1.17.0",
+    "ssh2-sftp-client": "^12.1.1",
+    "vite": "^5.4.11",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-vite": "^2.3.0"
+  }
+}

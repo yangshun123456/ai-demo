@@ -47,20 +47,55 @@ const demoContent = `server {
 export const useWorkspaceStore = defineStore('workspace', () => {
   const servers = ref([]);
   const aiProfiles = ref([fallbackAi]);
-  const activeServer = reactive({ ...fallbackServer });
   const serverDraft = reactive({ ...fallbackServer });
   const aiDraft = reactive({ ...fallbackAi });
-  const remotePath = ref(fallbackServer.rootPath);
-  const files = ref(demoFiles);
-  const fileListServerKey = ref('');
+
+  const sessions = ref([]);
+  const activeSessionId = ref(null);
+  const isSidebarCollapsed = ref(false);
+
+  const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value));
+  const activeServer = computed(() => activeSession.value?.server || null);
+  const connected = computed(() => sessions.value.length > 0);
+
+  const remotePath = computed({
+    get: () => activeSession.value?.remotePath || '/',
+    set: (val) => { if (activeSession.value) activeSession.value.remotePath = val; }
+  });
+  const files = computed({
+    get: () => activeSession.value?.files || [],
+    set: (val) => { if (activeSession.value) activeSession.value.files = val; }
+  });
+  const fileListServerKey = computed({
+    get: () => activeSession.value?.fileListServerKey || '',
+    set: (val) => { if (activeSession.value) activeSession.value.fileListServerKey = val; }
+  });
+  const selectedFile = computed({
+    get: () => activeSession.value?.selectedFile || '',
+    set: (val) => { if (activeSession.value) activeSession.value.selectedFile = val; }
+  });
+  const editorContent = computed({
+    get: () => activeSession.value?.editorContent || '',
+    set: (val) => { if (activeSession.value) activeSession.value.editorContent = val; }
+  });
+  const openTabs = computed({
+    get: () => activeSession.value?.openTabs || [],
+    set: (val) => { if (activeSession.value) activeSession.value.openTabs = val; }
+  });
+  const activeTab = computed({
+    get: () => activeSession.value?.activeTab || null,
+    set: (val) => { if (activeSession.value) activeSession.value.activeTab = val; }
+  });
+  const terminalLogs = computed({
+    get: () => activeSession.value?.terminalLogs || [],
+    set: (val) => { if (activeSession.value) activeSession.value.terminalLogs = val; }
+  });
+  const dirty = computed({
+    get: () => activeSession.value?.dirty || false,
+    set: (val) => { if (activeSession.value) activeSession.value.dirty = val; }
+  });
+
   const directoryCache = ref({});
-  const selectedFile = ref('nginx.conf');
-  const editorContent = ref(demoContent);
-  const openTabs = ref([]);
-  const activeTab = ref(null);
-  const terminalLogs = ref([]);
-  const dirty = ref(false);
-  const connected = ref(false);
   const status = ref('离线预览模式');
   const busy = ref(false);
   const prompt = ref('');
@@ -88,19 +123,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const currentServer = loadedServers.find((item) => item.id === activeServerId) || loadedServers[0] || null;
       const currentAi = loadedAi.find((item) => item.id === activeAiProfileId) || loadedAi[0];
       if (currentServer) {
-        assign(activeServer, currentServer);
         assign(serverDraft, currentServer);
-        remotePath.value = config.preferences?.lastRemotePath || currentServer.rootPath;
       } else {
         // 如果没有服务器，清空当前激活服务器状态
-        Object.keys(activeServer).forEach((key) => delete activeServer[key]);
         Object.keys(serverDraft).forEach((key) => delete serverDraft[key]);
-        remotePath.value = '/';
       }
       assign(aiDraft, currentAi);
-      if (loadedServers.length && currentServer) {
-        refreshFiles(currentServer, remotePath.value).catch(() => {});
-      }
     } catch {
       status.value = isElectronRuntime()
         ? 'Electron 窗口已启动，但后台桥接没有挂载成功。'
@@ -113,8 +141,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const bridge = getRuntimeBridge();
       const next = { ...serverDraft, id: serverDraft.id || crypto.randomUUID(), port: Number(serverDraft.port) || 22 };
       servers.value = await bridge.saveServer(next);
-      assign(activeServer, next);
-      remotePath.value = next.rootPath;
+      if (activeSession.value && activeSession.value.server.id === next.id) {
+        activeSession.value.server = next;
+      }
       status.value = '服务器配置已保存';
     } catch (error) {
       status.value = readableError(error, '当前未连接 Electron 后台，无法保存服务器配置。');
@@ -127,21 +156,68 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const bridge = getRuntimeBridge();
       const result = await bridge.testServer(JSON.parse(JSON.stringify(serverDraft)));
-      connected.value = result.ok;
       status.value = result.message;
       if (result.ok) {
-        assign(activeServer, serverDraft);
-        await refreshFiles(activeServer, activeServer.rootPath);
+        const id = Date.now().toString() + Math.random().toString(16).slice(2, 6);
+        const serverCopy = JSON.parse(JSON.stringify(serverDraft));
+        const newSession = {
+          id,
+          server: serverCopy,
+          remotePath: serverCopy.rootPath || '/',
+          files: [],
+          fileListServerKey: '',
+          selectedFile: '',
+          editorContent: '',
+          openTabs: [],
+          activeTab: null,
+          terminalLogs: [],
+          dirty: false,
+          terminalSessionId: null
+        };
+        sessions.value.push(newSession);
+        activeSessionId.value = id;
+        await refreshFiles(newSession.server, newSession.remotePath);
       }
     } catch (error) {
-      connected.value = false;
       status.value = readableError(error, '连接失败');
     } finally {
       busy.value = false;
     }
   }
 
-  async function refreshFiles(profile = activeServer, path = remotePath.value, returnOnly = false) {
+  function createSession(serverConfig) {
+    const id = Date.now().toString() + Math.random().toString(16).slice(2, 6);
+    const serverCopy = JSON.parse(JSON.stringify(serverConfig));
+    const newSession = {
+      id,
+      server: serverCopy,
+      remotePath: serverCopy.rootPath || '/',
+      files: [],
+      fileListServerKey: '',
+      selectedFile: '',
+      editorContent: '',
+      openTabs: [],
+      activeTab: null,
+      terminalLogs: [],
+      dirty: false,
+      terminalSessionId: null
+    };
+    sessions.value.push(newSession);
+    activeSessionId.value = id;
+    return newSession;
+  }
+
+  function closeSession(id) {
+    const idx = sessions.value.findIndex(s => s.id === id);
+    if (idx !== -1) {
+      sessions.value.splice(idx, 1);
+      if (activeSessionId.value === id) {
+        activeSessionId.value = sessions.value[idx]?.id || sessions.value[idx - 1]?.id || null;
+      }
+    }
+  }
+
+  async function refreshFiles(profile = activeServer.value, path = remotePath.value, returnOnly = false) {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
@@ -192,12 +268,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const nextPath = joinRemotePath(remotePath.value, file.name);
 
     if (file.type === 'd') {
-      await refreshFiles(activeServer, nextPath);
+      await refreshFiles(activeServer.value, nextPath);
       selectedFile.value = '';
       return;
     }
 
-    await openFile(activeServer, nextPath, file.name);
+    await openFile(activeServer.value, nextPath, file.name);
   }
 
   async function selectFileEntry(file) {
@@ -225,7 +301,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
-      await bridge.writeFile({ ...activeServer }, fullSelectedPath.value, editorContent.value);
+      await bridge.writeFile({ ...activeServer.value }, fullSelectedPath.value, editorContent.value);
       dirty.value = false;
       status.value = `已保存 ${fullSelectedPath.value}`;
     } catch (error) {
@@ -243,7 +319,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       busy.value = true;
       for (const localPath of localPaths) {
         await bridge.uploadFile(
-          { ...activeServer },
+          { ...activeServer.value },
           localPath,
           joinRemotePath(remotePath.value, localPath.split('/').pop() || 'upload')
         );
@@ -262,7 +338,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
-      const result = await bridge.downloadFile({ ...activeServer }, fullSelectedPath.value);
+      const result = await bridge.downloadFile({ ...activeServer.value }, fullSelectedPath.value);
       status.value = result.ok ? `已下载到 ${result.path}` : '已取消下载';
     } catch (error) {
       status.value = readableError(error, '下载失败');
@@ -275,7 +351,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     busy.value = true;
     try {
       const bridge = getRuntimeBridge();
-      await bridge.renameFile({ ...activeServer }, joinRemotePath(remotePath.value, oldName), joinRemotePath(remotePath.value, newName));
+      await bridge.renameFile({ ...activeServer.value }, joinRemotePath(remotePath.value, oldName), joinRemotePath(remotePath.value, newName));
       await refreshFiles();
       status.value = `已重命名 ${oldName} 为 ${newName}`;
     } catch (error) {
@@ -291,9 +367,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const bridge = getRuntimeBridge();
       const path = joinRemotePath(remotePath.value, file.name);
       if (file.type === 'd') {
-        await bridge.deleteDirectory({ ...activeServer }, path);
+        await bridge.deleteDirectory({ ...activeServer.value }, path);
       } else {
-        await bridge.deleteFile({ ...activeServer }, path);
+        await bridge.deleteFile({ ...activeServer.value }, path);
       }
       await refreshFiles();
       status.value = `已删除 ${file.name}`;
@@ -397,7 +473,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const outgoing = { role: 'user', content: prompt.value.trim() };
     const context = {
       role: 'system',
-      content: `${systemPrompt.value}\n\n当前服务器: ${activeServer.name} ${activeServer.host}. 当前路径: ${remotePath.value}. 当前文件: ${fullSelectedPath.value}.\n\n文件内容:\n${editorContent.value.slice(0, 6000)}`
+      content: `${systemPrompt.value}\n\n当前服务器: ${activeServer.value?.name} ${activeServer.value?.host}. 当前路径: ${remotePath.value}. 当前文件: ${fullSelectedPath.value}.\n\n文件内容:\n${editorContent.value.slice(0, 6000)}`
     };
     messages.value.push(outgoing);
     prompt.value = '';
@@ -426,23 +502,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function selectServer(server) {
-    assign(activeServer, server);
     assign(serverDraft, server);
-    remotePath.value = server.rootPath;
     const bridge = getRuntimeBridge();
     bridge?.activateServer(server.id).catch(() => {});
-    refreshFiles(server, server.rootPath).catch(() => {});
   }
 
-  function getCachedFiles(profile = activeServer, path = remotePath.value) {
+  function getCachedFiles(profile = activeServer.value, path = remotePath.value) {
     return directoryCache.value[getCacheKey(profile, path)] || null;
   }
 
-  function hasCachedFiles(profile = activeServer, path = remotePath.value) {
+  function hasCachedFiles(profile = activeServer.value, path = remotePath.value) {
     return Boolean(getCachedFiles(profile, path));
   }
 
-  function applyCachedFiles(profile = activeServer, path = remotePath.value) {
+  function applyCachedFiles(profile = activeServer.value, path = remotePath.value) {
     const cachedFiles = getCachedFiles(profile, path);
     if (!cachedFiles) return false;
     files.value = cachedFiles;
@@ -468,6 +541,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   return {
     servers,
+    sessions,
+    activeSessionId,
+    activeSession,
+    isSidebarCollapsed,
+    createSession,
+    closeSession,
     aiProfiles,
     activeServer,
     serverDraft,

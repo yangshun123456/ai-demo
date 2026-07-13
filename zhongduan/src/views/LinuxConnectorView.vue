@@ -265,10 +265,9 @@ async function startConnection(server, shouldSaveOnSuccess = false) {
 
         setTimeout(() => {
           showConnectingModal.value = false;
-          workspace.connected = true;
-          workspace.activeServer = serverToSave;
+          const session = workspace.createSession(serverToSave);
           workspace.status = `已连接到 ${serverToSave.name}`;
-          workspace.refreshFiles(serverToSave, serverToSave.rootPath || '/').catch(() => {});
+          workspace.refreshFiles(session.server, session.server.rootPath || '/').catch(() => {});
           router.push('/files');
         }, 800);
       } else {
@@ -300,8 +299,7 @@ async function startConnection(server, shouldSaveOnSuccess = false) {
 
         setTimeout(() => {
           showConnectingModal.value = false;
-          workspace.connected = true;
-          workspace.activeServer = serverToSave;
+          workspace.createSession(serverToSave);
           workspace.status = `已连接到 ${serverToSave.name} (预览模式)`;
           router.push('/files');
         }, 1000);
@@ -349,7 +347,7 @@ async function deleteSingleServer(server) {
       delete serverStatuses[server.id];
       
       if (workspace.activeServer?.id === server.id) {
-        workspace.connected = false;
+        workspace.closeSession(workspace.activeSessionId);
         workspace.status = '已断开连接';
       }
     } catch (err) {
@@ -372,7 +370,7 @@ async function deleteSelectedServers() {
       });
       
       if (selectedServerIds.value.includes(workspace.activeServer?.id)) {
-        workspace.connected = false;
+        workspace.closeSession(workspace.activeSessionId);
         workspace.status = '已断开连接';
       }
       

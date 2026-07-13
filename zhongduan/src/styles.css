@@ -46,7 +46,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px 1fr auto;
+  grid-template-columns: auto 1fr auto;
   width: 100vw;
   height: 100vh;
   background:
@@ -60,7 +60,46 @@ button {
   flex-direction: column;
   border-right: 1px solid #3b494b;
   background: #060e20;
+  width: 260px;
+  transition: width 0.3s ease;
+  overflow: hidden;
+  position: relative;
 }
+
+.sidebar.collapsed {
+  width: 72px;
+}
+
+.sidebar.collapsed .brand {
+  justify-content: center;
+  padding: 18px 0;
+}
+
+.sidebar.collapsed .brand div,
+.sidebar.collapsed nav > a > span,
+.sidebar.collapsed .session-card div {
+  display: none;
+}
+
+.sidebar.collapsed nav > a {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.collapsed .sub-nav {
+  padding-left: 0;
+  align-items: center;
+}
+
+.sidebar.collapsed .sub-nav-item {
+  padding: 8px;
+  justify-content: center;
+}
+
+.sidebar.collapsed .sub-nav-item .text-truncate {
+  display: none;
+}
+
 
 .brand {
   display: flex;
@@ -949,29 +988,6 @@ button {
 }
 
 @media (max-width: 1180px) {
-  .app-shell {
-    grid-template-columns: 72px 1fr;
-  }
-
-  .sidebar {
-    width: 72px;
-  }
-
-  .brand {
-    justify-content: center;
-    padding: 18px 0;
-  }
-
-  .brand div,
-  .sidebar a span,
-  .session-card div {
-    display: none;
-  }
-
-  .sidebar a {
-    justify-content: center;
-    padding: 0;
-  }
 
   .content-grid {
     grid-template-columns: 280px 1fr;
@@ -998,4 +1014,52 @@ button {
     border-bottom: 1px solid #3b494b;
     max-height: 360px;
   }
+}
+
+/* Session Sub-nav */
+.sub-nav {
+  display: flex;
+  flex-direction: column;
+  padding-left: 20px;
+  margin-top: 4px;
+  gap: 4px;
+}
+.sub-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #8b949e;
+  font-size: 13px;
+  transition: all 0.2s;
+  overflow: hidden;
+}
+.sub-nav-item .text-truncate {
+  flex: 1;
+  min-width: 0;
+}
+.sub-nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1d9;
+}
+.sub-nav-item.sub-active {
+  background: rgba(88, 166, 255, 0.1);
+  color: #58a6ff;
+}
+.session-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #484f58;
+}
+.session-dot.is-active {
+  background-color: #3fb950;
+  box-shadow: 0 0 8px rgba(63, 185, 80, 0.4);
+}
+.text-truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

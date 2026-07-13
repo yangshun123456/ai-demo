@@ -1,4 +1,4 @@
-# 智联 Linux AI Connector
+# Kernel AI
 
 一个基于 Electron + Vite + Vue + JavaScript 的 Linux AI 连接器原型，视觉风格参考 `stitch_ai_powered_linux_manager` 设计稿。
 
@@ -8,7 +8,7 @@
 - 远程文件列表浏览
 - 文件内容读取、编辑与保存
 - 文件上传、下载和拖拽上传入口
-- AI 助手对话面板
+- Kernel AI 对话面板
 - OpenAI-compatible 模型配置：Base URL、API Key、Model
 - Vue Router 页面路由
 - Pinia 工作台状态管理

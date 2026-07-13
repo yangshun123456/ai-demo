@@ -8,7 +8,8 @@ const defaultConfig = {
       name: 'OpenAI Compatible',
       baseUrl: 'https://api.openai.com/v1',
       apiKey: '',
-      model: 'gpt-4.1'
+      model: 'gpt-4.1',
+      models: []
     }
   ],
   preferences: {
@@ -119,15 +120,45 @@ const browserBridge = {
     });
     return readBrowserConfig().preferences;
   },
+  async listAiModels(profile) {
+    const baseUrl = (profile.baseUrl || '').trim().replace(/\/$/, '');
+    if (!baseUrl) throw new Error('请先填写 Base URL');
+    if (!profile.apiKey) throw new Error('请先填写 API Key');
+
+    const response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${profile.apiKey}`
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `获取模型失败: ${response.status}`);
+    }
+
+    const payload = await response.json();
+    return (payload.data || [])
+      .map((item) => item?.id)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+  },
   async chat(profile, messages) {
-    const response = await fetch(`${profile.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const baseUrl = (profile.baseUrl || '').trim().replace(/\/$/, '');
+    const apiKey = (profile.apiKey || '').trim();
+    const model = (profile.model || '').trim();
+    if (!baseUrl) throw new Error('请先填写 Base URL');
+    if (!apiKey) throw new Error('请先填写 API Key');
+    if (!model) throw new Error('请先选择模型');
+
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${profile.apiKey}`
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: profile.model,
+        model,
         messages,
         temperature: 0.2
       })
@@ -135,11 +166,15 @@ const browserBridge = {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `AI 请求失败: ${response.status}`);
+      throw new Error(getAiErrorMessage(text, response.status));
     }
 
     const payload = await response.json();
-    return payload.choices?.[0]?.message?.content ?? '';
+    const content = payload.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error('接口未返回有效的回复内容');
+    }
+    return content;
   },
   async testServer() {
     throw new Error('当前运行在浏览器预览模式，服务器连接、文件读写、上传下载需要从 Electron 桌面窗口启动。');
@@ -197,6 +232,15 @@ const browserBridge = {
   onCommandError() {},
   removeCommandListeners() {}
 };
+
+function getAiErrorMessage(text, status) {
+  try {
+    const payload = JSON.parse(text);
+    return payload?.error?.message || payload?.message || text || `HTTP ${status}`;
+  } catch {
+    return text || `HTTP ${status}`;
+  }
+}
 
 function readBrowserConfig() {
   if (typeof window === 'undefined') {

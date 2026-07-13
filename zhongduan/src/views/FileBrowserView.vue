@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onActivated, onMounted, onUnmounted, ref, shallowRef, watch, nextTick } from 'vue';
+import { computed, onActivated, onMounted, onUnmounted, reactive, ref, shallowRef, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
-  Bell, HelpCircle, FilePlus, FolderPlus, RefreshCw, X, Save, ChevronDown, Trash2, Download, FolderOpen, Loader2
+  Bell, HelpCircle, FilePlus, FolderPlus, RefreshCw, X, Save, ChevronDown, Trash2, Download, FolderOpen, Loader2, Zap, Sparkles, Send
 } from '@lucide/vue';
 import * as monaco from 'monaco-editor';
 import { Terminal } from '@xterm/xterm';
@@ -11,6 +11,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useWorkspaceStore } from '../stores/workspace';
 import AppSidebar from '../components/AppSidebar.vue';
 import FileTreeItem from '../components/FileTreeItem.vue';
+import AiMessageContent from '../components/AiMessageContent/index.vue';
 
 defineOptions({ name: 'FileBrowserView' });
 
@@ -29,6 +30,7 @@ const downloadItems = ref([]);
 const operationLoading = ref(false);
 const operationLoadingText = ref('');
 const savingFile = ref(false);
+const aiChatOpen = ref(false);
 const hasActiveConnection = computed(() => Boolean(workspace.connected && workspace.activeServer?.host));
 const activeServerKey = computed(() => (
   workspace.activeServer?.id ||
@@ -40,6 +42,26 @@ const shouldRefreshFilesOnMount = computed(() => (
     workspace.fileListServerKey !== activeServerKey.value ||
     !workspace.hasCachedFiles(workspace.activeServer, workspace.remotePath || '/')
   )
+));
+const availableAiModels = computed(() => (
+  Array.isArray(workspace.aiDraft.models) && workspace.aiDraft.models.length
+    ? workspace.aiDraft.models
+    : workspace.aiProfiles.map((item) => item.model).filter(Boolean)
+));
+const activeAiModel = computed({
+  get: () => workspace.aiDraft.model,
+  set: (model) => {
+    workspace.aiDraft.model = model;
+    if (workspace.aiDraft.id) {
+      workspace.saveAiProfileConfig({ ...workspace.aiDraft, model }).catch(() => {});
+    }
+  }
+});
+const activeAiModelLabel = computed(() => (
+  workspace.aiDraft.model ||
+  workspace.aiDraft.name ||
+  availableAiModels.value[0] ||
+  '选择模型'
 ));
 const dialogState = ref({
   show: false,
@@ -418,6 +440,31 @@ const openDownloadLocation = async (item) => {
   }
 };
 
+const toggleAiChat = () => {
+  aiChatOpen.value = !aiChatOpen.value;
+};
+
+const sendAiMessage = () => {
+  if (workspace.busy || !workspace.prompt.trim()) return;
+  workspace.sendMessage();
+};
+
+const handleAiKeydown = (event) => {
+  if (event.isComposing || event.shiftKey) return;
+  event.preventDefault();
+  sendAiMessage();
+};
+
+const copyCommandToTerminal = (command) => {
+  if (!term || !terminalSessionId.value) {
+    workspace.status = '终端尚未连接，无法写入命令';
+    return;
+  }
+  term.paste(command);
+  term.focus();
+  workspace.status = '命令已复制到终端，请确认后执行';
+};
+
 onMounted(() => {
   document.addEventListener('click', hideContextMenu);
   if (shouldRefreshFilesOnMount.value) {
@@ -633,6 +680,86 @@ onUnmounted(() => {
       <Loader2 :size="15" class="spin" />
       <span>{{ operationLoadingText }}</span>
     </div>
+
+    <div class="kernel-ai-dock" :class="{ open: aiChatOpen }">
+      <div v-if="aiChatOpen" class="kernel-ai-panel">
+        <header class="kernel-ai-head">
+          <div>
+            <Sparkles :size="18" />
+            <strong>Kernel AI</strong>
+          </div>
+          <div class="kernel-model-select-wrap">
+            <el-select
+              v-model="activeAiModel"
+              class="kernel-model-select"
+              popper-class="kernel-model-popper"
+              size="small"
+              :teleported="true"
+              :disabled="!availableAiModels.length"
+            >
+              <el-option
+                v-for="model in availableAiModels"
+                :key="model"
+                :label="model"
+                :value="model"
+              />
+            </el-select>
+            <span class="kernel-model-current">{{ activeAiModelLabel }}</span>
+          </div>
+        </header>
+
+        <div class="kernel-session-line">Session Initialized: {{ new Date().toLocaleTimeString() }}</div>
+
+        <div class="kernel-messages">
+          <div
+            v-for="(message, index) in workspace.messages"
+            :key="`${message.role}-${index}`"
+            class="kernel-message"
+            :class="message.role"
+          >
+            <div class="kernel-message-role">
+              <Sparkles v-if="message.role === 'assistant'" :size="14" />
+              <span>{{ message.role === 'assistant' ? workspace.aiDraft.model : 'User' }}</span>
+            </div>
+            <AiMessageContent
+              :content="message.content"
+              :enable-terminal-action="message.role === 'assistant'"
+              @copy-to-terminal="copyCommandToTerminal"
+            />
+          </div>
+          <div v-if="workspace.busy" class="kernel-message assistant">
+            <div class="kernel-message-role">
+              <Loader2 :size="14" class="spin" />
+              <span>{{ workspace.aiDraft.model }}</span>
+            </div>
+            <p>正在思考...</p>
+          </div>
+        </div>
+
+        <div class="kernel-composer">
+          <Sparkles :size="18" />
+          <textarea
+            v-model="workspace.prompt"
+            rows="1"
+            placeholder="输入指令或提问..."
+            @keydown.enter="handleAiKeydown"
+          />
+          <button :disabled="workspace.busy || !workspace.prompt.trim()" @click="sendAiMessage">
+            <Send :size="16" />
+          </button>
+        </div>
+        <footer class="kernel-ai-foot">
+          <span>Enter 发送，Shift+Enter 换行</span>
+          <span>Context Window: 8k / 128k</span>
+        </footer>
+      </div>
+
+      <button class="kernel-ai-toggle" :class="{ close: aiChatOpen }" @click="toggleAiChat">
+        <X v-if="aiChatOpen" :size="24" />
+        <Zap v-else :size="24" />
+      </button>
+    </div>
+
   </div>
 </template>
 
@@ -1205,6 +1332,10 @@ onUnmounted(() => {
   padding: 18px;
 }
 
+.ai-profile-dialog {
+  width: min(460px, 100%);
+}
+
 .dialog-title {
   color: #f0f6fc;
   font-weight: 600;
@@ -1301,6 +1432,322 @@ onUnmounted(() => {
   border-radius: 6px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.35);
   font-size: 13px;
+}
+
+.kernel-ai-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.kernel-ai-toggle {
+  width: 58px;
+  height: 58px;
+  border-radius: 12px;
+  border: 1px solid rgba(97, 232, 255, 0.85);
+  background: #64e6f4;
+  color: #07111f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 14px 36px rgba(0,0,0,0.45);
+}
+
+.kernel-ai-toggle.close {
+  background: #112036;
+  color: #64e6f4;
+  border-radius: 14px;
+}
+
+.kernel-ai-panel {
+  position: relative;
+  width: min(370px, calc(100vw - 48px));
+  height: min(520px, calc(100vh - 120px));
+  background: rgba(12, 20, 36, 0.96);
+  border: 1px solid rgba(100, 230, 244, 0.25);
+  border-radius: 8px;
+  box-shadow: 0 22px 60px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.kernel-model-select-wrap {
+  position: relative;
+  width: 190px;
+  flex-shrink: 0;
+}
+
+.kernel-model-select {
+  width: 100%;
+}
+
+.kernel-model-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  background: #111b2d;
+  border: 1px solid #2d405c;
+  box-shadow: none;
+  border-radius: 3px;
+}
+
+.kernel-model-select :deep(.el-select__selected-item) {
+  color: transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kernel-model-select :deep(.el-select__placeholder) {
+  color: transparent;
+}
+
+.kernel-model-select :deep(.el-select__caret) {
+  color: #64e6f4;
+}
+
+.kernel-model-current {
+  position: absolute;
+  left: 12px;
+  right: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64e6f4;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+:global(.kernel-model-popper) {
+  background: #30384b !important;
+  border: 1px solid #465066 !important;
+  border-radius: 5px !important;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45) !important;
+}
+
+:global(.kernel-model-popper .el-popper__arrow::before) {
+  background: #30384b !important;
+  border-color: #465066 !important;
+}
+
+:global(.kernel-model-popper .el-select-dropdown__item) {
+  height: 38px;
+  color: #c7d0df;
+  padding: 0 10px;
+}
+
+:global(.kernel-model-popper .el-select-dropdown__item.is-selected) {
+  color: #64e6f4;
+  font-weight: 700;
+}
+
+:global(.kernel-model-popper .el-select-dropdown__item.is-hovering) {
+  background: rgba(255,255,255,0.06);
+}
+
+:global(.kernel-model-popper .el-select-dropdown__footer) {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 8px;
+}
+
+.kernel-model-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.kernel-model-option-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kernel-model-option-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.kernel-model-option-actions svg {
+  color: #64e6f4;
+}
+
+.kernel-model-edit-btn,
+.kernel-model-add-row {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.kernel-model-edit-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #8d96a8;
+}
+
+.kernel-model-edit-btn:hover {
+  color: #64e6f4;
+  background: rgba(100, 230, 244, 0.1);
+}
+
+.kernel-model-add-row {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #8d96a8;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 8px;
+}
+
+.kernel-model-add-row:hover {
+  color: #c7d0df;
+  background: rgba(255,255,255,0.06);
+}
+
+.kernel-ai-head {
+  height: 54px;
+  border-bottom: 1px solid #1b2a40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+.kernel-ai-head > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #d6deea;
+  letter-spacing: 0;
+  min-width: 0;
+}
+
+.kernel-ai-head svg {
+  color: #64e6f4;
+}
+
+.kernel-session-line {
+  color: #607086;
+  font-size: 12px;
+  text-align: center;
+  padding: 18px 14px 8px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.kernel-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 12px;
+}
+
+.kernel-message {
+  border-left: 3px solid #64e6f4;
+  padding: 0 0 0 14px;
+  margin: 18px 0;
+  color: #c8d1de;
+}
+
+.kernel-message.user {
+  border-left-color: #5b8cff;
+}
+
+.kernel-message-role {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #64e6f4;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.kernel-message.user .kernel-message-role {
+  color: #86a5ff;
+}
+
+.kernel-message p {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  margin: 0;
+  font-size: 13px;
+}
+
+.kernel-composer {
+  margin: 0 16px;
+  border: 1px solid #314762;
+  background: #0c1424;
+  border-radius: 5px;
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+}
+
+.kernel-composer > svg {
+  color: #64e6f4;
+  flex-shrink: 0;
+}
+
+.kernel-composer textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  color: #d6deea;
+  background: transparent;
+  font-size: 13px;
+  max-height: 90px;
+}
+
+.kernel-composer button {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 5px;
+  background: #64e6f4;
+  color: #07111f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.kernel-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.kernel-ai-foot {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 18px;
+  color: #7b879a;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .spin {

@@ -11,7 +11,8 @@ export const defaultConfig = {
       name: 'OpenAI Compatible',
       baseUrl: 'https://api.openai.com/v1',
       apiKey: '',
-      model: 'gpt-4.1'
+      model: 'gpt-4.1',
+      models: []
     }
   ],
   preferences: {

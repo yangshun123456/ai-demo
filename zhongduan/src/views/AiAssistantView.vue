@@ -21,7 +21,7 @@ onMounted(() => {
       <header class="topbar">
         <div>
           <p class="label">Kernel & Pulse</p>
-          <h2>AI 助手</h2>
+          <h2>Kernel AI</h2>
         </div>
         <div class="top-actions">
           <button class="primary-btn" :disabled="workspace.busy" @click="workspace.testConnection">

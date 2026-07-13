@@ -45,14 +45,14 @@ function getNavClass(itemKey) {
     <div class="brand">
       <TerminalSquare :size="26" />
       <div>
-        <h1>智联 Linux</h1>
+        <h1>Kernel AI</h1>
         <p>{{ props.subtext }}</p>
       </div>
     </div>
     <nav>
       <RouterLink :class="getNavClass('servers')" to="/servers"><Server :size="18" />服务器</RouterLink>
       <RouterLink :class="getNavClass('files')" to="/files"><FolderOpen :size="18" />文件列表</RouterLink>
-      <RouterLink :class="getNavClass('ai')" to="/ai"><Bot :size="18" />AI 助手</RouterLink>
+      <RouterLink :class="getNavClass('ai')" to="/ai"><Bot :size="18" />大模型配置</RouterLink>
       <a :class="getNavClass('settings')"><Settings :size="18" />设置</a>
     </nav>
     <div v-if="props.showSessionCard" class="session-card">

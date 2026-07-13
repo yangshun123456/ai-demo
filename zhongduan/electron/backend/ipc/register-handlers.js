@@ -1,7 +1,7 @@
 import { dialog, ipcMain, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { readConfig } from '../repositories/config-repository.js';
-import { activateAiProfile, saveAiProfile, sendAiChat } from '../services/ai-service.js';
+import { activateAiProfile, listAiModels, saveAiProfile, sendAiChat } from '../services/ai-service.js';
 import {
   activateServerProfile,
   downloadServerFile,
@@ -130,6 +130,8 @@ export function registerIpcHandlers() {
     const config = await activateAiProfile(profileId);
     return config.preferences;
   });
+
+  ipcMain.handle('ai:list-models', (_event, profile) => listAiModels(profile));
 
   ipcMain.handle('ai:chat', (_event, profile, messages) => sendAiChat(profile, messages));
 

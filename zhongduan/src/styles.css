@@ -261,6 +261,7 @@ button {
 
 .field input,
 .field textarea,
+.field-select,
 .composer input,
 .composer textarea {
   width: 100%;
@@ -276,6 +277,7 @@ button {
 }
 
 .field input,
+.field-select,
 .composer input {
   height: 38px;
 }
@@ -287,11 +289,17 @@ button {
 
 .field input:focus,
 .field textarea:focus,
+.field-select:focus,
 .composer input:focus,
 .composer textarea:focus,
 .code-editor:focus {
   border-color: #00dbe9;
   box-shadow: 0 0 0 1px rgba(0, 219, 233, 0.35), 0 0 12px rgba(0, 219, 233, 0.12);
+}
+
+.field-select {
+  appearance: none;
+  cursor: pointer;
 }
 
 .split {
@@ -757,6 +765,152 @@ button {
   padding: 11px 10px;
   background: rgba(19, 27, 46, 0.6);
   backdrop-filter: blur(12px);
+}
+
+.llm-config-page {
+  display: grid;
+  grid-template-columns: minmax(480px, 0.9fr) minmax(420px, 1fr);
+  grid-auto-rows: min-content;
+  gap: 16px;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.llm-config-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid #3b494b;
+  border-radius: 8px;
+  background: rgba(19, 27, 46, 0.88);
+  padding: 16px;
+}
+
+.llm-config-card:first-child {
+  grid-row: span 2;
+  align-self: start;
+}
+
+.llm-form-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.llm-secret-field input {
+  letter-spacing: 0.08em;
+}
+
+.llm-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid rgba(0, 219, 233, 0.24);
+  border-radius: 6px;
+  background: rgba(0, 219, 233, 0.08);
+  color: #b9cacb;
+  font-size: 13px;
+  line-height: 20px;
+  padding: 12px;
+}
+
+.llm-note svg {
+  flex: 0 0 auto;
+  color: #00dbe9;
+  margin-top: 2px;
+}
+
+.llm-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.llm-model-grid button,
+.llm-profile-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #3b494b;
+  border-radius: 6px;
+  background: #0b1326;
+  color: #dae2fd;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  padding: 10px;
+  transition: 160ms ease;
+}
+
+.llm-model-grid button:hover,
+.llm-profile-list button:hover,
+.llm-model-grid button.active,
+.llm-profile-list button.active {
+  border-color: #00dbe9;
+  background: rgba(0, 219, 233, 0.1);
+}
+
+.llm-model-grid button span,
+.llm-profile-list button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-model-grid button svg {
+  color: #00dbe9;
+  flex: 0 0 auto;
+}
+
+.llm-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 180px;
+  border: 1px dashed #3b494b;
+  border-radius: 8px;
+  color: #849495;
+  text-align: center;
+  padding: 20px;
+}
+
+.llm-empty-state p {
+  max-width: 420px;
+  margin: 0;
+  line-height: 22px;
+}
+
+.llm-empty-state svg {
+  color: #00dbe9;
+}
+
+.llm-profile-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.llm-profile-list button {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(180px, 1fr) 72px;
+  text-align: left;
+}
+
+.llm-profile-list strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-profile-list small {
+  color: #849495;
+  text-align: right;
 }
 
 .composer .primary-btn {

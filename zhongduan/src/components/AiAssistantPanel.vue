@@ -9,6 +9,12 @@ const presets = ['排查高负载', 'Nginx 优化', 'Docker 调试'];
 function usePreset(preset) {
   workspace.prompt = preset;
 }
+
+function handleKeydown(event) {
+  if (event.isComposing || event.shiftKey || workspace.busy || !workspace.prompt.trim()) return;
+  event.preventDefault();
+  workspace.sendMessage();
+}
 </script>
 
 <template>
@@ -61,7 +67,7 @@ function usePreset(preset) {
       <div class="ai-chat-head">
         <div>
           <Sparkles :size="18" />
-          <strong>AI 助手</strong>
+          <strong>Kernel AI</strong>
         </div>
         <span>{{ workspace.aiDraft.model }}</span>
       </div>
@@ -70,7 +76,7 @@ function usePreset(preset) {
           <div class="message-meta">
             <Sparkles v-if="message.role === 'assistant'" :size="16" />
             <Terminal v-else :size="16" />
-            <span>{{ message.role === 'assistant' ? '系统助手' : '系统管理员' }}</span>
+            <span>{{ message.role === 'assistant' ? 'Kernel AI' : '系统管理员' }}</span>
             <small>{{ message.role === 'assistant' ? workspace.aiDraft.model : workspace.activeServer.name }}</small>
           </div>
           <p>{{ message.content }}</p>
@@ -81,7 +87,7 @@ function usePreset(preset) {
           v-model="workspace.prompt"
           placeholder="输入指令，或输入 '/' 唤出快捷命令..."
           rows="1"
-          @keydown.enter.exact.prevent="workspace.sendMessage"
+          @keydown.enter="handleKeydown"
         />
         <button class="primary-btn" @click="workspace.sendMessage"><Send :size="16" /></button>
       </div>

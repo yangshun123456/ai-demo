@@ -18,7 +18,8 @@ const fallbackAi = {
   name: 'OpenAI Compatible',
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
-  model: 'gpt-4.1'
+  model: 'gpt-4.1',
+  models: []
 };
 
 const demoFiles = [
@@ -63,7 +64,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const status = ref('离线预览模式');
   const busy = ref(false);
   const prompt = ref('');
-  const systemPrompt = ref('你是一个高级 Linux 系统管理员 AI 助手。请提供准确、安全且高效的 Bash 脚本和系统配置建议。回答应简洁专业。');
+  const systemPrompt = ref('你是 Kernel AI，一名高级 Linux 系统管理员助手。请提供准确、安全且高效的 Bash 脚本和系统配置建议。回答应简洁专业。');
   const messages = ref([
     {
       role: 'assistant',
@@ -341,15 +342,54 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function saveAiProfile() {
+    return saveAiProfileConfig(aiDraft);
+  }
+
+  async function saveAiProfileConfig(profile) {
     try {
       const bridge = getRuntimeBridge();
-      const next = { ...aiDraft, id: aiDraft.id || crypto.randomUUID() };
+      const next = {
+        ...profile,
+        id: profile.id || crypto.randomUUID(),
+        name: profile.name || profile.model,
+        models: Array.isArray(profile.models) ? profile.models.filter(Boolean) : []
+      };
       aiProfiles.value = await bridge.saveAiProfile(next);
       assign(aiDraft, next);
       status.value = '模型配置已保存';
+      return next;
     } catch (error) {
       status.value = readableError(error, '当前未连接 Electron 后台，无法保存模型配置。');
+      return null;
     }
+  }
+
+  async function fetchAiModels(profile = aiDraft) {
+    busy.value = true;
+    status.value = '正在连接大模型服务...';
+    try {
+      const bridge = getRuntimeBridge();
+      const models = await bridge.listAiModels(JSON.parse(JSON.stringify(profile)));
+      status.value = models.length ? `已获取 ${models.length} 个可用模型` : '连接成功，但没有返回可用模型';
+      return models;
+    } catch (error) {
+      status.value = readableError(error, '获取模型失败');
+      return [];
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function connectAndSaveAiProfile(profile = aiDraft) {
+    const models = await fetchAiModels(profile);
+    if (!models.length) return null;
+    const selectedModel = models.includes(profile.model) ? profile.model : models[0];
+    return saveAiProfileConfig({
+      ...profile,
+      model: selectedModel,
+      name: profile.name || 'OpenAI Compatible',
+      models
+    });
   }
 
   async function sendMessage() {
@@ -365,17 +405,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const bridge = getRuntimeBridge();
       const reply = await bridge.chat(
-        { ...aiDraft },
-        [context, ...messages.value.filter((item) => item.role !== 'system')]
+        JSON.parse(JSON.stringify(aiDraft)),
+        JSON.parse(JSON.stringify([
+          context,
+          ...messages.value.filter((item) => item.role !== 'system')
+        ]))
       );
       messages.value.push({ role: 'assistant', content: reply });
       status.value = 'AI 已回复';
-    } catch {
+    } catch (error) {
+      const errorMessage = readableError(error, '未知错误');
       messages.value.push({
         role: 'assistant',
-        content: 'AI 接口还没有连通。保存模型的 Base URL、API Key 和模型名后，就可以直接对话。'
+        content: `AI 请求失败：${errorMessage}`
       });
-      status.value = 'AI 请求未完成，已返回本地提示';
+      status.value = `AI 请求失败：${errorMessage}`;
     } finally {
       busy.value = false;
     }
@@ -465,6 +509,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     executeCommand,
     closeTab,
     saveAiProfile,
+    saveAiProfileConfig,
+    fetchAiModels,
+    connectAndSaveAiProfile,
     sendMessage,
     selectServer,
     selectAiProfile,

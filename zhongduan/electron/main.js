@@ -12,7 +12,7 @@ const createWindow = () => {
     height: 920,
     minWidth: 1120,
     minHeight: 720,
-    title: '智联 Linux',
+    title: 'Kernel AI',
     backgroundColor: '#0b1326',
     webPreferences: {
       preload: resolvePreloadPath(),

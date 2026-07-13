@@ -1,8 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import LinuxConnectorView from '../views/LinuxConnectorView.vue';
-import AiAssistantView from '../views/AiAssistantView.vue';
-
 import FileBrowserView from '../views/FileBrowserView.vue';
+import AiModelConfigView from '../views/AiModelConfigView.vue';
 
 const routes = [
   {
@@ -21,8 +20,8 @@ const routes = [
   },
   {
     path: '/ai',
-    name: 'ai-assistant',
-    component: AiAssistantView
+    name: 'ai-model-config',
+    component: AiModelConfigView
   }
 ];
 

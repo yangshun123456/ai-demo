@@ -42,5 +42,6 @@ contextBridge.exposeInMainWorld('linuxAi', {
   revealFileInFolder: (filePath) => ipcRenderer.invoke('local:reveal-file', filePath),
   saveAiProfile: (profile) => ipcRenderer.invoke('ai:save-profile', profile),
   activateAiProfile: (profileId) => ipcRenderer.invoke('ai:activate', profileId),
+  listAiModels: (profile) => ipcRenderer.invoke('ai:list-models', profile),
   chat: (profile, messages) => ipcRenderer.invoke('ai:chat', profile, messages)
 });

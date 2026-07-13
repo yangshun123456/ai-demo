@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { mkdir, readFile, writeFile, readdir, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 
 export const defaultConfig = {
@@ -22,9 +22,20 @@ export const defaultConfig = {
   }
 };
 
-// 自定义服务器配置文件目录
+// 服务器配置文件必须写入用户数据目录，打包后 process.cwd() 可能是根目录导致无权限写入。
 function serversConfigDirPath() {
+  return join(app.getPath('userData'), 'servers_config');
+}
+
+function legacyServersConfigDirPath() {
   return join(process.cwd(), 'servers_config');
+}
+
+function getReadableServersConfigDirs() {
+  const primaryDir = serversConfigDirPath();
+  const legacyDir = legacyServersConfigDirPath();
+  if (resolve(primaryDir) === resolve(legacyDir)) return [primaryDir];
+  return [primaryDir, legacyDir];
 }
 
 function configPath() {
@@ -41,28 +52,30 @@ export async function readConfig() {
     mainConfig = structuredClone(defaultConfig);
   }
 
-  // 2. 从自定义的 servers_config 目录中读取所有服务器配置文件
-  const dirPath = serversConfigDirPath();
+  // 2. 从用户数据目录读取服务器配置；兼容读取旧版本工作目录下的 servers_config。
   const loadedServers = [];
-  try {
-    if (existsSync(dirPath)) {
+  const loadedServerIds = new Set();
+  for (const dirPath of getReadableServersConfigDirs()) {
+    try {
+      if (!existsSync(dirPath)) continue;
       const files = await readdir(dirPath);
       for (const file of files) {
         if (file.endsWith('.json')) {
           try {
             const rawServer = await readFile(join(dirPath, file), 'utf8');
             const serverProfile = JSON.parse(rawServer);
-            if (serverProfile && serverProfile.id) {
+            if (serverProfile?.id && !loadedServerIds.has(serverProfile.id)) {
               loadedServers.push(serverProfile);
+              loadedServerIds.add(serverProfile.id);
             }
           } catch (e) {
             console.error(`读取服务器配置文件 ${file} 失败:`, e);
           }
         }
       }
+    } catch (err) {
+      console.error(`读取服务器配置目录失败 ${dirPath}:`, err);
     }
-  } catch (err) {
-    console.error('读取 servers_config 目录失败:', err);
   }
 
   // 3. 将加载的服务器列表合并入主配置中

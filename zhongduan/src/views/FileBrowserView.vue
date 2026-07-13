@@ -2,7 +2,7 @@
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, shallowRef, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
-  Bell, HelpCircle, FilePlus, FolderPlus, RefreshCw, X, Save, ChevronDown, Trash2, Download, FolderOpen, Loader2, Zap, Sparkles, Send
+  Bell, HelpCircle, FilePlus, FolderPlus, RefreshCw, X, Save, ChevronDown, Trash2, Download, FolderOpen, Loader2, Zap, Sparkles, Send, Upload
 } from '@lucide/vue';
 import * as monaco from 'monaco-editor';
 import { Terminal } from '@xterm/xterm';
@@ -26,11 +26,13 @@ const terminalSessionId = ref(null);
 const pathInputValue = ref(workspace.remotePath || '/');
 const rootNode = ref({ name: '/', path: '/', type: 'd', children: [], childrenLoaded: false });
 const treeVersion = ref(0);
+const uploadItems = ref([]);
 const downloadItems = ref([]);
 const operationLoading = ref(false);
 const operationLoadingText = ref('');
 const savingFile = ref(false);
 const aiChatOpen = ref(false);
+const treeDragActive = ref(false);
 const hasActiveConnection = computed(() => Boolean(workspace.connected && workspace.activeServer?.host));
 const activeServerKey = computed(() => (
   workspace.activeServer?.id ||
@@ -109,6 +111,11 @@ const dirname = (path = '/') => {
   return parent || '/';
 };
 
+const getLocalFileName = (path = '') => {
+  const normalizedPath = String(path).replace(/\\/g, '/');
+  return normalizedPath.split('/').filter(Boolean).pop() || 'upload';
+};
+
 const getTargetDirectory = (node) => {
   if (!node) return workspace.remotePath || '/';
   return node.type === 'd' ? node.path : dirname(node.path);
@@ -172,6 +179,118 @@ const withLoading = async (message, task) => {
     operationLoading.value = false;
     operationLoadingText.value = '';
   }
+};
+
+const getDroppedLocalPaths = (event) => (
+  Array.from(event.dataTransfer?.files || [])
+    .map((file) => file.path)
+    .filter(Boolean)
+);
+
+const updateUploadItem = (id, patch) => {
+  const item = uploadItems.value.find((entry) => entry.id === id);
+  if (!item) return;
+  Object.assign(item, patch);
+};
+
+const uploadLocalFilesToDirectory = async (targetDir, paths = []) => {
+  if (!hasActiveConnection.value) {
+    workspace.status = '暂无连接';
+    return;
+  }
+
+  if (operationLoading.value) {
+    workspace.status = '已有文件操作正在执行，请稍后再试';
+    return;
+  }
+
+  const bridge = window.linuxAi;
+  if (!bridge) {
+    workspace.status = '文件上传需要从 Electron 桌面窗口启动';
+    return;
+  }
+
+  hideContextMenu();
+  const normalizedTargetDir = normalizeRemotePath(targetDir || workspace.remotePath || '/');
+  const localPaths = paths.length ? paths : await bridge.pickLocalFiles();
+  if (!localPaths.length) return;
+
+  const queueItems = localPaths.map((localPath) => ({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    name: getLocalFileName(localPath),
+    localPath,
+    remotePath: joinRemotePath(normalizedTargetDir, getLocalFileName(localPath)),
+    targetDir: normalizedTargetDir,
+    progress: 0,
+    status: 'queued',
+    message: '排队中'
+  }));
+  uploadItems.value.unshift(...queueItems);
+
+  operationLoading.value = true;
+  operationLoadingText.value = `正在上传 ${localPaths.length} 个文件...`;
+  workspace.status = `正在上传到 ${normalizedTargetDir}`;
+
+  try {
+    for (const item of queueItems) {
+      updateUploadItem(item.id, { status: 'uploading', progress: 35, message: '上传中' });
+      try {
+        await bridge.uploadFile(
+          JSON.parse(JSON.stringify(workspace.activeServer)),
+          item.localPath,
+          item.remotePath
+        );
+        updateUploadItem(item.id, {
+          status: 'success',
+          progress: 100,
+          message: '上传完成',
+          finishedAt: new Date().toLocaleString()
+        });
+      } catch (error) {
+        updateUploadItem(item.id, {
+          status: 'error',
+          progress: 100,
+          message: error instanceof Error ? error.message : '上传失败'
+        });
+      }
+    }
+
+    await refreshCurrentFiles(normalizedTargetDir);
+    const successCount = queueItems.filter((item) => item.status === 'success').length;
+    workspace.status = `已上传 ${successCount}/${queueItems.length} 个文件到 ${normalizedTargetDir}`;
+  } finally {
+    operationLoading.value = false;
+    operationLoadingText.value = '';
+    treeDragActive.value = false;
+  }
+};
+
+const uploadToCurrentPath = () => {
+  uploadLocalFilesToDirectory(workspace.remotePath || '/');
+};
+
+const uploadToContextDirectory = () => {
+  const targetDir = getTargetDirectory(contextMenu.value.node);
+  uploadLocalFilesToDirectory(targetDir);
+};
+
+const handleTreeDrop = (event, node) => {
+  const localPaths = getDroppedLocalPaths(event);
+  if (!localPaths.length) {
+    workspace.status = '未识别到可上传的本地文件';
+    treeDragActive.value = false;
+    return;
+  }
+  uploadLocalFilesToDirectory(getTargetDirectory(node), localPaths);
+};
+
+const handleTreeContainerDrop = (event) => {
+  const localPaths = getDroppedLocalPaths(event);
+  if (!localPaths.length) {
+    treeDragActive.value = false;
+    return;
+  }
+  uploadLocalFilesToDirectory(workspace.remotePath || '/', localPaths);
 };
 
 const closeConnection = () => {
@@ -256,6 +375,7 @@ const initTerminal = async () => {
     cursorBlink: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace',
     fontSize: 13,
+    lineHeight: 1.15,
     theme: {
       background: '#0d1117',
       foreground: '#c9d1d9',
@@ -265,7 +385,9 @@ const initTerminal = async () => {
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(xtermContainer.value);
-  fitAddon.fit();
+  setTimeout(() => {
+    fitAddon?.fit();
+  }, 50);
 
   try {
     terminalSessionId.value = await window.linuxAi.startTerminalSession(JSON.parse(JSON.stringify(workspace.activeServer)));
@@ -496,6 +618,103 @@ onUnmounted(() => {
   cleanupTerminal();
 });
 
+// 终端高度调整
+const terminalHeight = ref(250);
+const startTerminalResize = (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startHeight = terminalHeight.value;
+  const panelEl = document.querySelector('.terminal-panel');
+
+  const doResize = (moveEvent) => {
+    const deltaY = moveEvent.clientY - startY;
+    const newHeight = startHeight - deltaY;
+    const targetHeight = Math.max(120, Math.min(600, newHeight));
+    terminalHeight.value = targetHeight;
+    if (panelEl) {
+      panelEl.style.height = `${targetHeight}px`;
+    }
+    requestAnimationFrame(() => {
+      fitAddon?.fit();
+    });
+  };
+
+  const stopResize = () => {
+    window.removeEventListener('mousemove', doResize);
+    window.removeEventListener('mouseup', stopResize);
+    setTimeout(() => {
+      fitAddon?.fit();
+    }, 50);
+  };
+
+  window.addEventListener('mousemove', doResize);
+  window.addEventListener('mouseup', stopResize);
+};
+
+// AI 面板尺寸调整
+const aiWidth = ref(370);
+const aiHeight = ref(520);
+
+const startAiResizeWidth = (e) => {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startWidth = aiWidth.value;
+
+  const doResize = (moveEvent) => {
+    const deltaX = moveEvent.clientX - startX;
+    aiWidth.value = Math.max(300, Math.min(800, startWidth - deltaX));
+  };
+
+  const stopResize = () => {
+    window.removeEventListener('mousemove', doResize);
+    window.removeEventListener('mouseup', stopResize);
+  };
+
+  window.addEventListener('mousemove', doResize);
+  window.addEventListener('mouseup', stopResize);
+};
+
+const startAiResizeHeight = (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startHeight = aiHeight.value;
+
+  const doResize = (moveEvent) => {
+    const deltaY = moveEvent.clientY - startY;
+    aiHeight.value = Math.max(350, Math.min(800, startHeight - deltaY));
+  };
+
+  const stopResize = () => {
+    window.removeEventListener('mousemove', doResize);
+    window.removeEventListener('mouseup', stopResize);
+  };
+
+  window.addEventListener('mousemove', doResize);
+  window.addEventListener('mouseup', stopResize);
+};
+
+const startAiResizeBoth = (e) => {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const startWidth = aiWidth.value;
+  const startHeight = aiHeight.value;
+
+  const doResize = (moveEvent) => {
+    const deltaX = moveEvent.clientX - startX;
+    const deltaY = moveEvent.clientY - startY;
+    aiWidth.value = Math.max(300, Math.min(800, startWidth - deltaX));
+    aiHeight.value = Math.max(350, Math.min(800, startHeight - deltaY));
+  };
+
+  const stopResize = () => {
+    window.removeEventListener('mousemove', doResize);
+    window.removeEventListener('mouseup', stopResize);
+  };
+
+  window.addEventListener('mousemove', doResize);
+  window.addEventListener('mouseup', stopResize);
+};
 </script>
 
 <template>
@@ -504,6 +723,13 @@ onUnmounted(() => {
 
     <main class="main-content">
       <header class="app-header">
+        <div v-if="workspace.connected && workspace.activeServer" class="header-server-info">
+          <span class="server-dot"></span>
+          <span class="server-name-text" :title="`${workspace.activeServer.username}@${workspace.activeServer.host}:${workspace.activeServer.port}`">
+            当前连接：{{ workspace.activeServer.name }} ({{ workspace.activeServer.host }})
+          </span>
+        </div>
+        <div v-else></div>
         <div class="header-right">
           <button class="disconnect-btn" @click="closeConnection">
             <X :size="16" /> 关闭连接
@@ -523,6 +749,9 @@ onUnmounted(() => {
               <button class="sidebar-action-btn" title="新建文件夹" :disabled="!hasActiveConnection || operationLoading" @click="createNewFolder(null)">
                 <FolderPlus :size="16" />
               </button>
+              <button class="sidebar-action-btn" title="上传文件" :disabled="!hasActiveConnection || operationLoading" @click="uploadToCurrentPath">
+                <Upload :size="16" />
+              </button>
               <button class="sidebar-action-btn" title="刷新" :disabled="!hasActiveConnection || operationLoading || workspace.busy" @click="refreshCurrentFiles">
                 <Loader2 v-if="workspace.busy" :size="16" class="spin" />
                 <RefreshCw v-else :size="16" />
@@ -539,7 +768,14 @@ onUnmounted(() => {
               placeholder="/root/path..."
             />
           </div>
-          <div class="file-tree-container">
+          <div
+            class="file-tree-container"
+            :class="{ 'is-dragging': treeDragActive }"
+            @dragenter.prevent="treeDragActive = true"
+            @dragover.prevent
+            @dragleave.self="treeDragActive = false"
+            @drop.prevent="handleTreeContainerDrop"
+          >
             <FileTreeItem 
               v-if="hasActiveConnection"
               :key="treeVersion"
@@ -547,24 +783,53 @@ onUnmounted(() => {
               :level="0"
               :current-path="workspace.remotePath"
               @contextmenu="showContextMenu"
+              @upload-drop="handleTreeDrop"
             />
             <div v-else class="no-connection-state">
               <X :size="18" />
               <span>暂无连接</span>
             </div>
           </div>
-          <div class="download-panel">
-            <div class="download-header">
-              <span>下载列表</span>
-              <span class="download-count">{{ downloadItems.length }}</span>
+          <div class="transfer-panel upload-panel">
+            <div class="transfer-header">
+              <span>上传列表</span>
+              <span class="transfer-count">{{ uploadItems.length }}</span>
             </div>
-            <div v-if="downloadItems.length" class="download-list">
-              <div v-for="item in downloadItems" :key="item.id" class="download-item">
-                <div class="download-main">
+            <div v-if="uploadItems.length" class="transfer-list">
+              <div v-for="item in uploadItems" :key="item.id" class="transfer-item">
+                <div class="transfer-main">
+                  <Upload :size="14" />
+                  <div class="transfer-text">
+                    <span class="transfer-name">{{ item.name }}</span>
+                    <span class="transfer-path">{{ item.remotePath }}</span>
+                  </div>
+                </div>
+                <div class="upload-progress-row">
+                  <div class="upload-progress-track">
+                    <span
+                      class="upload-progress-bar"
+                      :class="item.status"
+                      :style="{ width: `${item.progress}%` }"
+                    ></span>
+                  </div>
+                  <span class="upload-status" :class="item.status">{{ item.message }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="transfer-empty">暂无上传文件</div>
+          </div>
+          <div class="transfer-panel download-panel">
+            <div class="transfer-header">
+              <span>下载列表</span>
+              <span class="transfer-count">{{ downloadItems.length }}</span>
+            </div>
+            <div v-if="downloadItems.length" class="transfer-list">
+              <div v-for="item in downloadItems" :key="item.id" class="transfer-item">
+                <div class="transfer-main">
                   <Download :size="14" />
-                  <div class="download-text">
-                    <span class="download-name">{{ item.name }}</span>
-                    <span class="download-path">{{ item.localPath }}</span>
+                  <div class="transfer-text">
+                    <span class="transfer-name">{{ item.name }}</span>
+                    <span class="transfer-path">{{ item.localPath }}</span>
                   </div>
                 </div>
                 <button class="open-location-btn" @click="openDownloadLocation(item)">
@@ -573,7 +838,7 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
-            <div v-else class="download-empty">暂无下载文件</div>
+            <div v-else class="transfer-empty">暂无下载文件</div>
           </div>
         </aside>
 
@@ -611,7 +876,8 @@ onUnmounted(() => {
           </div>
 
           <!-- Terminal Panel -->
-          <div class="terminal-panel">
+          <div class="terminal-panel" :style="{ height: terminalHeight + 'px' }">
+            <div class="terminal-resize-handle" @mousedown="startTerminalResize"></div>
             <div class="terminal-header">
               <div class="term-title">
                 <span class="status-dot"></span>
@@ -622,7 +888,9 @@ onUnmounted(() => {
                 <X :size="16" class="action-icon" />
               </div>
             </div>
-            <div class="terminal-body" ref="xtermContainer"></div>
+            <div class="terminal-body">
+              <div ref="xtermContainer" class="xterm-wrapper"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -636,6 +904,7 @@ onUnmounted(() => {
     >
       <div class="menu-item" @click="createNewFile()"><FilePlus :size="16"/> 新建文件</div>
       <div class="menu-item" @click="createNewFolder()"><FolderPlus :size="16"/> 新建文件夹</div>
+      <div class="menu-item" @click="uploadToContextDirectory"><Upload :size="16"/> 上传文件</div>
       <div class="divider"></div>
       <div class="menu-item" @click="renameNode"><span class="icon-text">✎</span> 重命名</div>
       <div class="menu-item" @click="copyPath"><span class="icon-text">📄</span> 复制路径</div>
@@ -682,7 +951,11 @@ onUnmounted(() => {
     </div>
 
     <div class="kernel-ai-dock" :class="{ open: aiChatOpen }">
-      <div v-if="aiChatOpen" class="kernel-ai-panel">
+      <div v-if="aiChatOpen" class="kernel-ai-panel" :style="{ width: aiWidth + 'px', height: aiHeight + 'px' }">
+        <!-- 拖拽尺寸手柄 -->
+        <div class="ai-resize-handle-left" @mousedown="startAiResizeWidth"></div>
+        <div class="ai-resize-handle-top" @mousedown="startAiResizeHeight"></div>
+        <div class="ai-resize-handle-corner" @mousedown="startAiResizeBoth"></div>
         <header class="kernel-ai-head">
           <div>
             <Sparkles :size="18" />
@@ -740,7 +1013,7 @@ onUnmounted(() => {
           <Sparkles :size="18" />
           <textarea
             v-model="workspace.prompt"
-            rows="1"
+            rows="3"
             placeholder="输入指令或提问..."
             @keydown.enter="handleAiKeydown"
           />
@@ -787,8 +1060,35 @@ onUnmounted(() => {
   border-bottom: 1px solid #30363d;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   padding: 0 20px;
+}
+
+.header-server-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #00d2ff;
+  background-color: rgba(0, 210, 255, 0.08);
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 210, 255, 0.15);
+}
+
+.server-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #3fb950;
+  box-shadow: 0 0 8px #3fb950;
+}
+
+.server-name-text {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-left {
@@ -934,17 +1234,31 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 4px;
+  border: 1px solid transparent;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
 }
 
-.download-panel {
+.file-tree-container.is-dragging {
+  border-color: rgba(0, 210, 255, 0.45);
+  background-color: rgba(0, 210, 255, 0.06);
+}
+
+.transfer-panel {
   border-top: 1px solid #30363d;
   background-color: #0d1117;
-  max-height: 220px;
   display: flex;
   flex-direction: column;
 }
 
-.download-header {
+.upload-panel {
+  max-height: 240px;
+}
+
+.download-panel {
+  max-height: 220px;
+}
+
+.transfer-header {
   padding: 10px 12px;
   display: flex;
   align-items: center;
@@ -955,7 +1269,7 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.download-count {
+.transfer-count {
   min-width: 18px;
   height: 18px;
   border-radius: 9px;
@@ -967,12 +1281,12 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-.download-list {
+.transfer-list {
   overflow-y: auto;
   padding: 0 8px 8px;
 }
 
-.download-item {
+.transfer-item {
   border: 1px solid #30363d;
   background-color: #161b22;
   border-radius: 6px;
@@ -980,40 +1294,89 @@ onUnmounted(() => {
   margin-bottom: 8px;
 }
 
-.download-main {
+.transfer-main {
   display: flex;
   gap: 8px;
   align-items: flex-start;
   color: #c9d1d9;
 }
 
-.download-main svg {
+.transfer-main svg {
   color: #00d2ff;
   flex-shrink: 0;
   margin-top: 2px;
 }
 
-.download-text {
+.transfer-text {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 
-.download-name,
-.download-path {
+.transfer-name,
+.transfer-path {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.download-name {
+.transfer-name {
   font-size: 13px;
 }
 
-.download-path {
+.transfer-path {
   color: #8b949e;
   font-size: 11px;
+}
+
+.upload-progress-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.upload-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background-color: #30363d;
+}
+
+.upload-progress-bar {
+  display: block;
+  height: 100%;
+  min-width: 6px;
+  border-radius: inherit;
+  background-color: #00d2ff;
+  transition: width 0.24s ease, background-color 0.18s ease;
+}
+
+.upload-progress-bar.success {
+  background-color: #3fb950;
+}
+
+.upload-progress-bar.error {
+  background-color: #f85149;
+}
+
+.upload-status {
+  max-width: 88px;
+  color: #8b949e;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-status.success {
+  color: #3fb950;
+}
+
+.upload-status.error {
+  color: #f85149;
 }
 
 .open-location-btn {
@@ -1036,7 +1399,7 @@ onUnmounted(() => {
   background-color: #21262d;
 }
 
-.download-empty {
+.transfer-empty {
   color: #6e7681;
   font-size: 12px;
   padding: 0 12px 12px;
@@ -1191,11 +1554,27 @@ onUnmounted(() => {
 
 /* Terminal Panel */
 .terminal-panel {
-  height: 250px;
+  position: relative;
   background-color: #0d1117;
   border-top: 1px solid #30363d;
   display: flex;
   flex-direction: column;
+}
+
+.terminal-resize-handle {
+  height: 4px;
+  width: 100%;
+  cursor: ns-resize;
+  background-color: transparent;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  transition: background-color 0.2s ease;
+}
+.terminal-resize-handle:hover,
+.terminal-resize-handle:active {
+  background-color: #00d2ff;
 }
 
 .terminal-header {
@@ -1241,7 +1620,13 @@ onUnmounted(() => {
 .terminal-body {
   flex: 1;
   padding: 8px;
+  margin-bottom: 12px;
   overflow: hidden;
+}
+
+.xterm-wrapper {
+  height: calc(100% - 4px);
+  width: 100%;
 }
 
 .term-line {
@@ -1467,8 +1852,6 @@ onUnmounted(() => {
 
 .kernel-ai-panel {
   position: relative;
-  width: min(370px, calc(100vw - 48px));
-  height: min(520px, calc(100vh - 120px));
   background: rgba(12, 20, 36, 0.96);
   border: 1px solid rgba(100, 230, 244, 0.25);
   border-radius: 8px;
@@ -1476,6 +1859,50 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: visible;
+}
+
+/* AI 面板拖拽尺寸手柄 */
+.ai-resize-handle-left {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  background-color: transparent;
+  z-index: 10;
+}
+.ai-resize-handle-left:hover {
+  background-color: rgba(100, 230, 244, 0.3);
+}
+
+.ai-resize-handle-top {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  background-color: transparent;
+  z-index: 10;
+}
+.ai-resize-handle-top:hover {
+  background-color: rgba(100, 230, 244, 0.3);
+}
+
+.ai-resize-handle-corner {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+  background-color: transparent;
+  z-index: 11;
+}
+.ai-resize-handle-corner:hover {
+  background-color: rgba(100, 230, 244, 0.6);
+  border-radius: 50%;
 }
 
 .kernel-model-select-wrap {
@@ -1695,16 +2122,17 @@ onUnmounted(() => {
   border: 1px solid #314762;
   background: #0c1424;
   border-radius: 5px;
-  min-height: 50px;
+  min-height: 80px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 7px 8px 7px 12px;
+  padding: 10px 8px 10px 12px;
 }
 
 .kernel-composer > svg {
   color: #64e6f4;
   flex-shrink: 0;
+  margin-top: 4px;
 }
 
 .kernel-composer textarea {
@@ -1715,7 +2143,9 @@ onUnmounted(() => {
   color: #d6deea;
   background: transparent;
   font-size: 13px;
-  max-height: 90px;
+  min-height: 60px;
+  max-height: 180px;
+  line-height: 1.5;
 }
 
 .kernel-composer button {
@@ -1730,6 +2160,7 @@ onUnmounted(() => {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  align-self: flex-end;
 }
 
 .kernel-composer button:disabled {

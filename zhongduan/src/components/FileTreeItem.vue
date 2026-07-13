@@ -9,7 +9,7 @@ const props = defineProps({
   currentPath: { type: String, default: '/' },
 });
 
-const emit = defineEmits(['contextmenu']);
+const emit = defineEmits(['contextmenu', 'upload-drop']);
 
 const workspace = useWorkspaceStore();
 const isOpen = ref(props.level === 0);
@@ -101,6 +101,10 @@ const handleContextMenu = (e) => {
   emit('contextmenu', e, props.node);
 };
 
+const handleDrop = (event) => {
+  emit('upload-drop', event, props.node);
+};
+
 const isSelected = computed(() => {
   return workspace.activeTab?.path === props.node.path;
 });
@@ -128,6 +132,8 @@ watch(isPathInsideNode, (shouldOpen) => {
       :style="{ paddingLeft: `${level * 12 + 8}px` }"
       @click.stop="handleClick"
       @contextmenu.prevent.stop="handleContextMenu"
+      @dragover.prevent.stop
+      @drop.prevent.stop="handleDrop"
     >
       <div class="expand-icon-wrap" :class="{ invisible: node.type !== 'd' }">
         <Loader2 v-if="isLoading" :size="14" class="spin" />
@@ -148,6 +154,7 @@ watch(isPathInsideNode, (shouldOpen) => {
         :level="level + 1"
         :current-path="currentPath"
         @contextmenu="(e, n) => emit('contextmenu', e, n)"
+        @upload-drop="(e, n) => emit('upload-drop', e, n)"
       />
     </div>
   </div>

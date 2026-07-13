@@ -8,11 +8,15 @@ export default defineConfig({
       lib: {
         entry: resolve(__dirname, 'electron/main.js')
       },
+      rollupOptions: {
+        external: ['ssh2', 'ssh2-sftp-client']
+      },
       outDir: 'dist-electron'
     }
   },
   preload: {
     build: {
+      emptyOutDir: false,
       lib: {
         entry: resolve(__dirname, 'electron/preload.js')
       },

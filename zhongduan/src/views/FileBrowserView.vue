@@ -794,7 +794,7 @@ const startAiResizeBoth = (e) => {
               <button class="sidebar-action-btn" title="上传文件" :disabled="!hasActiveConnection || operationLoading" @click="uploadToCurrentPath">
                 <Upload :size="16" />
               </button>
-              <button class="sidebar-action-btn" title="刷新" :disabled="!hasActiveConnection || operationLoading || workspace.busy" @click="refreshCurrentFiles">
+              <button class="sidebar-action-btn" title="刷新" :disabled="!hasActiveConnection || operationLoading || workspace.busy" @click="refreshCurrentFiles()">
                 <Loader2 v-if="workspace.busy" :size="16" class="spin" />
                 <RefreshCw v-else :size="16" />
               </button>

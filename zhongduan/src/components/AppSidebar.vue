@@ -1,6 +1,6 @@
 <script setup>
-import { computed } from 'vue';
-import { Bot, FolderOpen, Server, Settings, TerminalSquare, PanelLeftClose, PanelLeftOpen } from '@lucide/vue';
+import { computed, ref } from 'vue';
+import { Bot, FolderOpen, Server, Settings, TerminalSquare, ChevronLeft, ChevronRight } from '@lucide/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWorkspaceStore } from '../stores/workspace';
 
@@ -22,8 +22,9 @@ const props = defineProps({
 const workspace = useWorkspaceStore();
 const route = useRoute();
 
+const isCollapsed = ref(false);
 const toggleCollapse = () => {
-  workspace.isSidebarCollapsed = !workspace.isSidebarCollapsed;
+  isCollapsed.value = !isCollapsed.value;
 };
 const router = useRouter();
 const serverLabel = computed(() => {
@@ -53,7 +54,7 @@ function selectSession(sessionId) {
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ 'collapsed': workspace.isSidebarCollapsed }">
+  <aside class="sidebar" :class="{ 'collapsed': isCollapsed }">
     <div class="brand">
       <TerminalSquare :size="26" />
       <div>
@@ -81,67 +82,43 @@ function selectSession(sessionId) {
       <RouterLink :class="getNavClass('ai')" to="/ai" title="大模型配置"><Bot :size="18" /><span>大模型配置</span></RouterLink>
       <a :class="getNavClass('settings')" title="设置"><Settings :size="18" /><span>设置</span></a>
     </nav>
-    <div style="flex: 1;"></div>
-    
-    <div class="sidebar-bottom-section">
-      <div v-if="props.showSessionCard" class="session-card">
-        <span :class="workspace.connected ? 'pulse online' : 'pulse'" />
-        <div>
-          <strong>{{ workspace.connected ? 'Active Session' : 'Preview Session' }}</strong>
-          <p>{{ serverLabel }}</p>
-        </div>
-      </div>
-      
-      <div class="sidebar-footer">
-        <button class="collapse-footer-btn" @click="toggleCollapse" :title="workspace.isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'">
-          <PanelLeftOpen v-if="workspace.isSidebarCollapsed" :size="20" />
-          <PanelLeftClose v-else :size="20" />
-          <span class="collapse-text">收起侧边栏</span>
-        </button>
+    <div v-if="props.showSessionCard" class="session-card">
+      <span :class="workspace.connected ? 'pulse online' : 'pulse'" />
+      <div>
+        <strong>{{ workspace.connected ? 'Active Session' : 'Preview Session' }}</strong>
+        <p>{{ serverLabel }}</p>
       </div>
     </div>
+    
+    <button class="collapse-toggle-btn" @click="toggleCollapse" title="展开/折叠">
+      <ChevronRight v-if="isCollapsed" :size="16" />
+      <ChevronLeft v-else :size="16" />
+    </button>
   </aside>
 </template>
 
 <style scoped>
-.sidebar-bottom-section {
-  display: flex;
-  flex-direction: column;
-}
-.sidebar-footer {
-  padding: 12px 16px;
-  border-top: 1px solid #3b494b;
-}
-.sidebar.collapsed .sidebar-footer {
-  padding: 12px 0;
-  display: flex;
-  justify-content: center;
-}
-.collapse-footer-btn {
-  width: 100%;
-  background: transparent;
-  border: none;
-  color: #8b949e;
-  cursor: pointer;
+.collapse-toggle-btn {
+  position: absolute;
+  bottom: 24px;
+  right: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #00dbe9;
+  color: #0b1326;
+  border: 4px solid #0b1326;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  transition: all 0.2s ease;
-  font-size: 14px;
-}
-.sidebar.collapsed .collapse-footer-btn {
-  width: auto;
   justify-content: center;
-  padding: 10px;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s;
+  padding: 0;
 }
-.sidebar.collapsed .collapse-text {
-  display: none;
-}
-.collapse-footer-btn:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #c9d1d9;
+
+.collapse-toggle-btn:hover {
+  transform: scale(1.1);
+  background: #3ee6f1;
 }
 </style>

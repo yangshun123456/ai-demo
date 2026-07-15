@@ -722,7 +722,11 @@ const createWindow = () => {
       sandbox: false
     }
   });
-  if (process.env.VITE_DEV_SERVER_URL) {
+  console.log("VITE_DEV_SERVER_URL:", process.env.VITE_DEV_SERVER_URL);
+  console.log("ELECTRON_RENDERER_URL:", process.env.ELECTRON_RENDERER_URL);
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else if (process.env.VITE_DEV_SERVER_URL) {
     void win.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
     void win.loadFile(join(__dirname$1, "../dist/index.html"));
@@ -731,6 +735,9 @@ const createWindow = () => {
     void win.webContents.executeJavaScript(
       "window.__linuxAiBridgeState = { hasRuntime: !!window.linuxAiRuntime, hasBridge: !!window.linuxAi };"
     );
+  });
+  win.webContents.on("console-message", (event, level, message, line, sourceId) => {
+    console.log(`[Renderer Console] Level ${level}: ${message} (${sourceId}:${line})`);
   });
 };
 app.whenReady().then(() => {

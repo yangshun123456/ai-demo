@@ -13,6 +13,14 @@
   box-sizing: border-box;
 }
 
+.sidebar,
+.context-menu,
+.dialog-card,
+.sub-nav-item,
+.file-tree-container {
+  user-select: none;
+}
+
 body {
   margin: 0;
   min-width: 1120px;

@@ -13,6 +13,10 @@ import AppSidebar from '../components/AppSidebar.vue';
 import FileTreeItem from '../components/FileTreeItem.vue';
 import AiMessageContent from '../components/AiMessageContent/index.vue';
 
+const vFocus = {
+  mounted: (el) => el.focus()
+};
+
 defineOptions({ name: 'FileBrowserView' });
 
 const router = useRouter();
@@ -617,7 +621,9 @@ onMounted(() => {
   watch(() => workspace.activeSessionId, (newId) => {
     if (newId) {
       nextTick(() => {
-        initTerminal(newId);
+        if (!terminalState[newId]) {
+          initTerminal(newId);
+        }
         setTimeout(() => {
           terminalState[newId]?.fitAddon?.fit();
         }, 50);
@@ -630,7 +636,11 @@ onActivated(() => {
   nextTick(() => {
     editorInstance.value?.layout();
     if (workspace.activeSessionId) {
-      terminalState[workspace.activeSessionId]?.fitAddon?.fit();
+      if (!terminalState[workspace.activeSessionId]) {
+        initTerminal(workspace.activeSessionId);
+      } else {
+        terminalState[workspace.activeSessionId]?.fitAddon?.fit();
+      }
     }
   });
 });
@@ -923,7 +933,13 @@ const startAiResizeBoth = (e) => {
               </div>
             </div>
             <div class="terminal-body">
-              <div ref="xtermContainer" class="xterm-wrapper"></div>
+              <div 
+                v-for="session in workspace.sessions" 
+                :key="session.id"
+                :id="`xterm-${session.id}`" 
+                class="xterm-wrapper"
+                v-show="workspace.activeSessionId === session.id"
+              ></div>
             </div>
           </div>
         </div>
@@ -956,6 +972,7 @@ const startAiResizeBoth = (e) => {
         <label v-if="dialogState.mode === 'prompt'" class="dialog-field">
           <span>{{ dialogState.label }}</span>
           <input
+            v-focus
             v-model="dialogState.value"
             :placeholder="dialogState.placeholder"
             @keydown.enter.prevent="submitDialog"

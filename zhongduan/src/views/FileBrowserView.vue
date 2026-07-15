@@ -20,7 +20,8 @@ const workspace = useWorkspaceStore();
 
 const editorContainer = ref(null);
 const editorInstance = shallowRef(null);
-const terminalState = {};
+const xtermContainer = ref(null);
+const terminalSessionId = ref(null);
 
 const pathInputValue = ref(workspace.remotePath || '/');
 const rootNode = ref({ name: '/', path: '/', type: 'd', children: [], childrenLoaded: false });
@@ -293,13 +294,9 @@ const handleTreeContainerDrop = (event) => {
 };
 
 const closeConnection = () => {
-  const currentId = workspace.activeSessionId;
-  if (!currentId) return;
-  cleanupTerminal(currentId);
-  workspace.closeSession(currentId);
-  if (!workspace.connected) {
-    router.push('/servers');
-  }
+  cleanupTerminal();
+  workspace.connected = false;
+  router.push('/servers');
 };
 
 const initEditor = () => {
@@ -357,25 +354,24 @@ const saveActiveFile = async () => {
   }
 };
 
-const cleanupTerminal = (sessionId) => {
-  const state = terminalState[sessionId];
-  if (!state) return;
-  if (state.term) {
-    state.term.dispose();
+let term;
+let fitAddon;
+
+const cleanupTerminal = () => {
+  if (term) {
+    term.dispose();
+    term = null;
   }
-  if (state.terminalSessionId && window.linuxAi) {
-    window.linuxAi.removeTerminalListeners(state.terminalSessionId);
-    window.linuxAi.closeTerminalSession(state.terminalSessionId);
+  if (terminalSessionId.value && window.linuxAi) {
+    window.linuxAi.removeTerminalListeners(terminalSessionId.value);
+    window.linuxAi.closeTerminalSession(terminalSessionId.value);
+    terminalSessionId.value = null;
   }
-  delete terminalState[sessionId];
 };
 
-const initTerminal = async (sessionId) => {
-  if (!window.linuxAi) return;
-  const container = document.getElementById(`xterm-${sessionId}`);
-  if (!container || terminalState[sessionId]) return;
-  
-  const term = new Terminal({
+const initTerminal = async () => {
+  if (!xtermContainer.value || !window.linuxAi) return;
+  term = new Terminal({
     cursorBlink: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace',
     fontSize: 13,
@@ -386,38 +382,31 @@ const initTerminal = async (sessionId) => {
       cursor: '#00d2ff'
     }
   });
-  const fitAddon = new FitAddon();
+  fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  term.open(container);
+  term.open(xtermContainer.value);
   setTimeout(() => {
-    fitAddon.fit();
+    fitAddon?.fit();
   }, 50);
 
-  const sessionData = workspace.sessions.find(s => s.id === sessionId);
-  if (!sessionData) return;
-
   try {
-    const tSid = await window.linuxAi.startTerminalSession(JSON.parse(JSON.stringify(sessionData.server)));
-    
-    terminalState[sessionId] = { term, fitAddon, terminalSessionId: tSid };
+    terminalSessionId.value = await window.linuxAi.startTerminalSession(JSON.parse(JSON.stringify(workspace.activeServer)));
     
     term.onData((data) => {
-      window.linuxAi.writeTerminalSession(tSid, data);
+      window.linuxAi.writeTerminalSession(terminalSessionId.value, data);
     });
 
     term.onResize(({ cols, rows }) => {
-      window.linuxAi.resizeTerminalSession(tSid, cols, rows);
+      window.linuxAi.resizeTerminalSession(terminalSessionId.value, cols, rows);
     });
 
-    window.linuxAi.onTerminalData(tSid, (data) => {
+    window.linuxAi.onTerminalData(terminalSessionId.value, (data) => {
       term.write(data);
     });
 
-    const resizeHandler = () => {
+    window.addEventListener('resize', () => {
       fitAddon.fit();
-    };
-    window.addEventListener('resize', resizeHandler);
-    terminalState[sessionId].resizeHandler = resizeHandler;
+    });
   } catch (error) {
     term.write(`\x1b[31mFailed to start terminal: ${error.message}\x1b[0m\n`);
   }
@@ -589,13 +578,12 @@ const handleAiKeydown = (event) => {
 };
 
 const copyCommandToTerminal = (command) => {
-  const state = terminalState[workspace.activeSessionId];
-  if (!state || !state.term || !state.terminalSessionId) {
+  if (!term || !terminalSessionId.value) {
     workspace.status = '终端尚未连接，无法写入命令';
     return;
   }
-  state.term.paste(command);
-  state.term.focus();
+  term.paste(command);
+  term.focus();
   workspace.status = '命令已复制到终端，请确认后执行';
 };
 
@@ -609,27 +597,8 @@ onMounted(() => {
   
   nextTick(() => {
     initEditor();
-    if (hasActiveConnection.value && workspace.activeSessionId) {
-      initTerminal(workspace.activeSessionId);
-    }
-  });
-  
-  watch(() => workspace.activeSessionId, async (newId, oldId) => {
-    if (newId && newId !== oldId) {
-      // Refresh files for new session
-      if (!workspace.hasCachedFiles(workspace.activeServer, workspace.remotePath || '/')) {
-        await workspace.refreshFiles(workspace.activeServer, workspace.remotePath || '/');
-      } else {
-        workspace.applyCachedFiles(workspace.activeServer, workspace.remotePath || '/');
-      }
-      resetTree();
-      
-      nextTick(() => {
-        initTerminal(newId);
-        setTimeout(() => {
-          terminalState[newId]?.fitAddon?.fit();
-        }, 50);
-      });
+    if (hasActiveConnection.value) {
+      initTerminal();
     }
   });
 });
@@ -637,9 +606,7 @@ onMounted(() => {
 onActivated(() => {
   nextTick(() => {
     editorInstance.value?.layout();
-    if (workspace.activeSessionId) {
-      terminalState[workspace.activeSessionId]?.fitAddon?.fit();
-    }
+    fitAddon?.fit();
   });
 });
 
@@ -648,12 +615,7 @@ onUnmounted(() => {
   if (editorInstance.value) {
     editorInstance.value.dispose();
   }
-  Object.keys(terminalState).forEach(id => {
-    if (terminalState[id].resizeHandler) {
-      window.removeEventListener('resize', terminalState[id].resizeHandler);
-    }
-    cleanupTerminal(id);
-  });
+  cleanupTerminal();
 });
 
 // 终端高度调整
@@ -673,9 +635,7 @@ const startTerminalResize = (e) => {
       panelEl.style.height = `${targetHeight}px`;
     }
     requestAnimationFrame(() => {
-      if (workspace.activeSessionId) {
-        terminalState[workspace.activeSessionId]?.fitAddon?.fit();
-      }
+      fitAddon?.fit();
     });
   };
 
@@ -683,9 +643,7 @@ const startTerminalResize = (e) => {
     window.removeEventListener('mousemove', doResize);
     window.removeEventListener('mouseup', stopResize);
     setTimeout(() => {
-      if (workspace.activeSessionId) {
-        terminalState[workspace.activeSessionId]?.fitAddon?.fit();
-      }
+      fitAddon?.fit();
     }, 50);
   };
 
@@ -794,7 +752,7 @@ const startAiResizeBoth = (e) => {
               <button class="sidebar-action-btn" title="上传文件" :disabled="!hasActiveConnection || operationLoading" @click="uploadToCurrentPath">
                 <Upload :size="16" />
               </button>
-              <button class="sidebar-action-btn" title="刷新" :disabled="!hasActiveConnection || operationLoading || workspace.busy" @click="refreshCurrentFiles()">
+              <button class="sidebar-action-btn" title="刷新" :disabled="!hasActiveConnection || operationLoading || workspace.busy" @click="refreshCurrentFiles">
                 <Loader2 v-if="workspace.busy" :size="16" class="spin" />
                 <RefreshCw v-else :size="16" />
               </button>

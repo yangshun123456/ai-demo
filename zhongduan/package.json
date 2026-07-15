@@ -9,10 +9,9 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "prepack": "rm -rf release",
-    "pack:dir": "npm run prepack && pnpm build && electron-builder --dir",
-    "dist:mac": "npm run prepack && pnpm build && electron-builder --mac",
-    "dist:win": "npm run prepack && pnpm build && electron-builder --win",
+    "pack:dir": "pnpm build && electron-builder --dir",
+    "dist:mac": "pnpm build && electron-builder --mac",
+    "dist:win": "pnpm build && electron-builder --win",
     "preview": "electron-vite preview",
     "lint": "electron-vite build"
   },
@@ -33,7 +32,7 @@
       "node_modules/**/*.node"
     ],
     "mac": {
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
       "target": [
         "dmg",
         "zip"
@@ -41,7 +40,7 @@
       "category": "public.app-category.developer-tools"
     },
     "win": {
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "zip"
